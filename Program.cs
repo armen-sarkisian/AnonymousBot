@@ -1,4 +1,5 @@
 using AnonymousBot.Data;
+using AnonymousBot.Services;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 
@@ -17,6 +18,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
 }
 
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
+builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
 
@@ -25,7 +27,7 @@ var app = builder.Build();
 await using (var scope = app.Services.CreateAsyncScope())
 {
 	var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-	await db.Database.EnsureCreatedAsync();
+	await db.Database.MigrateAsync();
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

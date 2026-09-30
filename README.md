@@ -19,6 +19,10 @@ $env:ConnectionStrings__DefaultConnection = "Server=localhost;Database=Anonymous
 dotnet run --project .\AnonymousBot.csproj
 ```
 
-При первом запуске приложение создаёт базу и таблицу через `EnsureCreated`. Для последующих изменений схемы добавьте EF Core migrations.
+При первом запуске приложение применяет EF Core migrations и создаёт нужные таблицы.
 
 При запуске приложение удаляет ранее установленный webhook и начинает получать сообщения через long polling. Оно должно оставаться запущенным. Проверка состояния приложения: `GET /health`.
+
+Схема базы управляется через EF Core migrations. Миграции применяются при старте приложения; строку подключения можно переопределить через `ConnectionStrings__DefaultConnection`. Для создания новой миграции используйте `dotnet ef migrations add <MigrationName>`.
+
+Команда `/start` регистрирует пользователя по Telegram ID, сохраняет имя и username и отвечает `Добро пожаловать!`. Для заблокированных пользователей бот сообщает, что доступ ограничен.
