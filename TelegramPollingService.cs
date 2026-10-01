@@ -44,9 +44,46 @@ public sealed class TelegramPollingService(
 		await using var scope = scopeFactory.CreateAsyncScope();
 		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 		var userService = scope.ServiceProvider.GetRequiredService<UserService>();
+		var userSessionService = scope.ServiceProvider.GetRequiredService<UserSessionService>();
 
-		if (IsStartCommand(text))
+		if (TryGetStartToken(text, out var token))
 		{
+			if (token is not null)
+			{
+				if (await userService.IsBlockedAsync(telegramUser.Id, cancellationToken))
+				{
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "Доступ к боту ограничен.",
+						cancellationToken: cancellationToken);
+					return;
+				}
+
+				var linkResult = await userSessionService.StartFromLinkAsync(
+					telegramUser.Id,
+					token,
+					cancellationToken);
+
+				if (linkResult.Status != StartLinkStatus.Ready)
+				{
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "❌ Ссылка недействительна или больше не существует.",
+						cancellationToken: cancellationToken);
+					return;
+				}
+
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "💬 Ты можешь отправить анонимное сообщение этому пользователю.",
+					cancellationToken: cancellationToken);
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "Напиши сообщение следующим сообщением.",
+					cancellationToken: cancellationToken);
+				return;
+			}
+
 			var result = await userService.StartAsync(
 				telegramUser.Id,
 				telegramUser.Username,
@@ -76,6 +113,11 @@ public sealed class TelegramPollingService(
 				chatId: message.Chat.Id,
 				text: "Доступ к боту ограничен.",
 				cancellationToken: cancellationToken);
+			return;
+		}
+
+		if (await userSessionService.ConsumeWaitingMessageAsync(telegramUser.Id, cancellationToken) is not null)
+		{
 			return;
 		}
 
@@ -117,10 +159,18 @@ public sealed class TelegramPollingService(
 			cancellationToken: cancellationToken);
 	}
 
-	private static bool IsStartCommand(string text)
+	private static bool TryGetStartToken(string text, out string? token)
 	{
-		var command = text.Split(' ', 2)[0].Split('@')[0];
-		return string.Equals(command, "/start", StringComparison.OrdinalIgnoreCase);
+		var parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+		var command = parts.Length == 0 ? string.Empty : parts[0].Split('@')[0];
+		if (!string.Equals(command, "/start", StringComparison.OrdinalIgnoreCase))
+		{
+			token = null;
+			return false;
+		}
+
+		token = parts.Length > 1 ? string.Join(' ', parts.Skip(1)) : null;
+		return true;
 	}
 
 	private static bool IsLinkCommand(string text)

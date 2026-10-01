@@ -114,7 +114,7 @@ public sealed class UserService(AppDbContext db)
     }
 
     private static string CreateToken() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(16))
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');

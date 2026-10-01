@@ -24,6 +24,7 @@ public sealed class UserServiceTests
         Assert.Equal("test_user", user.Username);
         Assert.Equal("Test", user.FirstName);
         Assert.False(string.IsNullOrWhiteSpace(user.Token));
+        Assert.Equal(22, user.Token.Length);
         Assert.False(user.IsBlocked);
         Assert.Equal(DateTimeKind.Utc, user.CreatedAt.Kind);
         Assert.InRange(user.CreatedAt, before, DateTime.UtcNow);
@@ -119,6 +120,101 @@ public sealed class UserServiceTests
         Assert.False(link.UserExists);
         Assert.Null(link.Link);
         Assert.Empty(await db.Users.ToListAsync());
+    }
+
+    [Fact]
+    public async Task StartFromLinkAsync_ValidTokenCreatesSessionForOwner()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, telegramUserId: 456, "owner-token");
+        var service = new UserSessionService(db);
+
+        var result = await service.StartFromLinkAsync(senderTelegramUserId: 123, "owner-token");
+
+        var session = await db.UserSessions.SingleAsync();
+        Assert.Equal(StartLinkStatus.Ready, result.Status);
+        Assert.Equal(123, session.TelegramUserId);
+        Assert.Equal(UserSessionState.WaitingForAnonymousMessage, session.State);
+        Assert.Equal(owner.Id, session.ReceiverUserId);
+        Assert.Equal(DateTimeKind.Utc, session.CreatedAt.Kind);
+        Assert.Equal(DateTimeKind.Utc, session.UpdatedAt.Kind);
+    }
+
+    [Fact]
+    public async Task StartFromLinkAsync_InvalidTokenDoesNotCreateSession()
+    {
+        await using var db = CreateDbContext();
+        var service = new UserSessionService(db);
+
+        var result = await service.StartFromLinkAsync(senderTelegramUserId: 123, "missing-token");
+
+        Assert.Equal(StartLinkStatus.InvalidToken, result.Status);
+        Assert.Empty(await db.UserSessions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task StartFromLinkAsync_BlockedOwnerDoesNotCreateSession()
+    {
+        await using var db = CreateDbContext();
+        await AddUserAsync(db, telegramUserId: 456, "blocked-token", isBlocked: true);
+        var service = new UserSessionService(db);
+
+        var result = await service.StartFromLinkAsync(senderTelegramUserId: 123, "blocked-token");
+
+        Assert.Equal(StartLinkStatus.BlockedOwner, result.Status);
+        Assert.Empty(await db.UserSessions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task StartFromLinkAsync_SecondTokenReplacesSenderSession()
+    {
+        await using var db = CreateDbContext();
+        var firstOwner = await AddUserAsync(db, telegramUserId: 456, "first-token");
+        var secondOwner = await AddUserAsync(db, telegramUserId: 789, "second-token");
+        var service = new UserSessionService(db);
+        await service.StartFromLinkAsync(senderTelegramUserId: 123, "first-token");
+
+        await service.StartFromLinkAsync(senderTelegramUserId: 123, "second-token");
+
+        var session = await db.UserSessions.SingleAsync();
+        Assert.Equal(1, await db.UserSessions.CountAsync());
+        Assert.NotEqual(firstOwner.Id, session.ReceiverUserId);
+        Assert.Equal(secondOwner.Id, session.ReceiverUserId);
+        Assert.Equal(UserSessionState.WaitingForAnonymousMessage, session.State);
+    }
+
+    [Fact]
+    public async Task ConsumeWaitingMessageAsync_ClearsSessionWithoutSavingMessageText()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, telegramUserId: 456, "owner-token");
+        var service = new UserSessionService(db);
+        await service.StartFromLinkAsync(senderTelegramUserId: 123, "owner-token");
+
+        var receiverUserId = await service.ConsumeWaitingMessageAsync(123);
+
+        var session = await db.UserSessions.SingleAsync();
+        Assert.Equal(owner.Id, receiverUserId);
+        Assert.Equal(UserSessionState.None, session.State);
+        Assert.Null(session.ReceiverUserId);
+        Assert.Empty(await db.Messages.ToListAsync());
+    }
+
+    private static async Task<User> AddUserAsync(
+        AppDbContext db,
+        long telegramUserId,
+        string token,
+        bool isBlocked = false)
+    {
+        var user = new User
+        {
+            TelegramUserId = telegramUserId,
+            Token = token,
+            IsBlocked = isBlocked
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        return user;
     }
 
     private static AppDbContext CreateDbContext()

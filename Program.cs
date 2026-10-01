@@ -19,6 +19,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
 builder.Services.AddScoped<UserService>();
+builder.Services.AddScoped<UserSessionService>();
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
 
