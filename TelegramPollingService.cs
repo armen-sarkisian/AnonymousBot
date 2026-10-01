@@ -30,6 +30,12 @@ public sealed class TelegramPollingService(
 		Update update,
 		CancellationToken cancellationToken)
 	{
+		if (update.CallbackQuery is { } callbackQuery)
+		{
+			await HandleCallbackQueryAsync(client, callbackQuery, cancellationToken);
+			return;
+		}
+
 		if (update.Message is not { } message || message.From is not { } telegramUser)
 		{
 			return;
@@ -41,6 +47,7 @@ public sealed class TelegramPollingService(
 		var userService = scope.ServiceProvider.GetRequiredService<UserService>();
 		var userSessionService = scope.ServiceProvider.GetRequiredService<UserSessionService>();
 		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
+		var answerService = scope.ServiceProvider.GetRequiredService<AnswerService>();
 
 		if (text is not null && TryGetStartToken(text, out var token))
 		{
@@ -114,7 +121,14 @@ public sealed class TelegramPollingService(
 
 		if (text is null)
 		{
-			if (await questionService.IsWaitingForMessageAsync(telegramUser.Id, cancellationToken))
+			if (await answerService.IsWaitingForAnswerAsync(telegramUser.Id, cancellationToken))
+			{
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Ответ пока можно отправить только текстом.",
+					cancellationToken: cancellationToken);
+			}
+			else if (await questionService.IsWaitingForMessageAsync(telegramUser.Id, cancellationToken))
 			{
 				await client.SendMessage(
 					chatId: message.Chat.Id,
@@ -123,6 +137,44 @@ public sealed class TelegramPollingService(
 			}
 
 			return;
+		}
+
+		if (await answerService.IsWaitingForAnswerAsync(telegramUser.Id, cancellationToken))
+		{
+			var answerResult = await answerService.SubmitAsync(
+				telegramUser.Id,
+				text,
+				cancellationToken);
+
+			switch (answerResult.Status)
+			{
+				case AnswerSubmissionStatus.Saved:
+					return;
+				case AnswerSubmissionStatus.QuestionUnavailable:
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "❌ У тебя нет доступа к этому вопросу.",
+						cancellationToken: cancellationToken);
+					return;
+				case AnswerSubmissionStatus.AlreadyAnswered:
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "На этот вопрос уже сохранён ответ.",
+						cancellationToken: cancellationToken);
+					return;
+				case AnswerSubmissionStatus.EmptyText:
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "❌ Ответ не может быть пустым.",
+						cancellationToken: cancellationToken);
+					return;
+				case AnswerSubmissionStatus.TooLong:
+					await client.SendMessage(
+						chatId: message.Chat.Id,
+						text: "❌ Ответ слишком длинный. Сократи его и попробуй снова.",
+						cancellationToken: cancellationToken);
+					return;
+			}
 		}
 
 		if (IsLinkCommand(text))
@@ -200,6 +252,132 @@ public sealed class TelegramPollingService(
 			chatId: message.Chat.Id,
 			text: $"You said: {text}",
 			cancellationToken: cancellationToken);
+	}
+
+	private async Task HandleCallbackQueryAsync(
+		ITelegramBotClient client,
+		CallbackQuery callbackQuery,
+		CancellationToken cancellationToken)
+	{
+		if (!TryParseCallbackData(callbackQuery.Data, out var action, out var questionId))
+		{
+			await client.AnswerCallbackQuery(
+				callbackQuery.Id,
+				text: "Это действие недоступно.",
+				cancellationToken: cancellationToken);
+			return;
+		}
+
+		await using var scope = scopeFactory.CreateAsyncScope();
+		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
+		var answerService = scope.ServiceProvider.GetRequiredService<AnswerService>();
+
+		if (action == "copy")
+		{
+			var draftResult = await answerService.GetDraftAsync(
+				callbackQuery.From.Id,
+				questionId,
+				cancellationToken);
+			if (draftResult.Status != AnswerDraftStatus.Ready || draftResult.Notification is null)
+			{
+				await client.AnswerCallbackQuery(
+					callbackQuery.Id,
+					text: "❌ У тебя нет доступа к этому вопросу.",
+					showAlert: true,
+					cancellationToken: cancellationToken);
+				return;
+			}
+
+			await client.SendMessage(
+				chatId: draftResult.Notification.OwnerTelegramUserId,
+				text: draftResult.Notification.DraftText,
+				cancellationToken: cancellationToken);
+			await client.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+			return;
+		}
+
+		if (action == "delete")
+		{
+			var result = await questionService.DeleteAsync(
+				callbackQuery.From.Id,
+				questionId,
+				cancellationToken);
+			if (result.Status != QuestionActionStatus.Success)
+			{
+				var error = result.Status == QuestionActionStatus.AlreadyDeleted
+					? "Вопрос уже удалён."
+					: "❌ У тебя нет доступа к этому вопросу.";
+				await client.AnswerCallbackQuery(
+					callbackQuery.Id,
+					text: error,
+					showAlert: true,
+					cancellationToken: cancellationToken);
+				return;
+			}
+
+			if (callbackQuery.Message is { } deletedMessage)
+			{
+				await client.EditMessageReplyMarkup(
+					chatId: deletedMessage.Chat.Id,
+					messageId: deletedMessage.MessageId,
+					replyMarkup: null,
+					cancellationToken: cancellationToken);
+			}
+
+			await client.AnswerCallbackQuery(
+				callbackQuery.Id,
+				text: "🗑 Вопрос удалён.",
+				cancellationToken: cancellationToken);
+			return;
+		}
+
+		var answerStatus = await answerService.BeginAnswerAsync(
+			callbackQuery.From.Id,
+			questionId,
+			cancellationToken);
+		if (answerStatus != QuestionActionStatus.Success)
+		{
+			var error = answerStatus switch
+			{
+				QuestionActionStatus.AlreadyDeleted => "Вопрос уже удалён.",
+				QuestionActionStatus.AlreadyAnswered => "На этот вопрос уже сохранён ответ.",
+				_ => "❌ У тебя нет доступа к этому вопросу."
+			};
+			await client.AnswerCallbackQuery(
+				callbackQuery.Id,
+				text: error,
+				showAlert: true,
+				cancellationToken: cancellationToken);
+			return;
+		}
+
+		await client.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+		await client.SendMessage(
+			chatId: callbackQuery.From.Id,
+			text: "✍️ Напиши свой ответ на этот вопрос.",
+			cancellationToken: cancellationToken);
+	}
+
+	private static bool TryParseCallbackData(string? data, out string action, out int questionId)
+	{
+		action = string.Empty;
+		questionId = 0;
+		var parts = data?.Split(':');
+		if (parts is not { Length: 3 } ||
+			!int.TryParse(parts[2], out questionId) ||
+			questionId <= 0)
+		{
+			return false;
+		}
+
+		if ((parts[0] == "question" && parts[1] is "answer" or "delete") ||
+			(parts[0] == "answer" && parts[1] == "copy"))
+		{
+			action = parts[1] == "answer" ? "begin-answer" : parts[1];
+			return true;
+		}
+
+		return false;
 	}
 
 	private static bool TryGetStartToken(string text, out string? token)

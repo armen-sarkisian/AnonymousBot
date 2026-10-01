@@ -21,8 +21,10 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(conn
 builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<UserSessionService>();
 builder.Services.AddScoped<QuestionService>();
+builder.Services.AddScoped<AnswerService>();
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddScoped<IQuestionNotifier, TelegramQuestionNotifier>();
+builder.Services.AddScoped<IAnswerNotifier, TelegramAnswerNotifier>();
 builder.Services.AddHostedService<TelegramPollingService>();
 
 var app = builder.Build();

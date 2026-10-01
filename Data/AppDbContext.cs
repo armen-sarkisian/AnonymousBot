@@ -9,6 +9,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<Question> Questions => Set<Question>();
+    public DbSet<Answer> Answers => Set<Answer>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -38,6 +39,24 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(question => question.ReceiverUser)
                 .WithMany(user => user.Questions)
                 .HasForeignKey(question => question.ReceiverUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Answer>(entity =>
+        {
+            entity.Property(answer => answer.Text).IsRequired();
+            entity.HasIndex(answer => answer.QuestionId).IsUnique();
+            entity.HasOne(answer => answer.Question)
+                .WithOne(question => question.Answer)
+                .HasForeignKey<Answer>(answer => answer.QuestionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<UserSession>(entity =>
+        {
+            entity.HasOne<Question>()
+                .WithMany()
+                .HasForeignKey(session => session.QuestionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

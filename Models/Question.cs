@@ -9,4 +9,5 @@ public sealed class Question
     public QuestionStatus Status { get; set; }
 
     public User ReceiverUser { get; set; } = null!;
+    public Answer? Answer { get; set; }
 }

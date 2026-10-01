@@ -6,6 +6,35 @@ namespace AnonymousBot.Services;
 
 public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 {
+    public async Task<QuestionActionResult> DeleteAsync(
+        long telegramUserId,
+        int questionId,
+        CancellationToken cancellationToken = default)
+    {
+        var userId = await FindUserIdAsync(telegramUserId, cancellationToken);
+        if (userId is null)
+        {
+            return new QuestionActionResult(QuestionActionStatus.NotAuthorized);
+        }
+
+        var question = await db.Questions.SingleOrDefaultAsync(
+            candidate => candidate.Id == questionId && candidate.ReceiverUserId == userId,
+            cancellationToken);
+        if (question is null)
+        {
+            return new QuestionActionResult(QuestionActionStatus.NotFoundOrNotOwner);
+        }
+
+        if (question.Status == QuestionStatus.Deleted)
+        {
+            return new QuestionActionResult(QuestionActionStatus.AlreadyDeleted);
+        }
+
+        question.Status = QuestionStatus.Deleted;
+        await db.SaveChangesAsync(cancellationToken);
+        return new QuestionActionResult(QuestionActionStatus.Success);
+    }
+
     public Task<bool> IsWaitingForMessageAsync(
         long senderTelegramUserId,
         CancellationToken cancellationToken = default) =>
@@ -81,8 +110,15 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
     {
         session.State = UserSessionState.None;
         session.ReceiverUserId = null;
+        session.QuestionId = null;
         session.UpdatedAt = DateTime.UtcNow;
     }
+
+    private Task<int?> FindUserIdAsync(long telegramUserId, CancellationToken cancellationToken) =>
+        db.Users
+            .Where(user => user.TelegramUserId == telegramUserId)
+            .Select(user => (int?)user.Id)
+            .SingleOrDefaultAsync(cancellationToken);
 }
 
 public enum QuestionSubmissionStatus
@@ -96,3 +132,14 @@ public enum QuestionSubmissionStatus
 }
 
 public sealed record QuestionSubmissionResult(QuestionSubmissionStatus Status);
+
+public enum QuestionActionStatus
+{
+    Success,
+    NotFoundOrNotOwner,
+    AlreadyDeleted,
+    AlreadyAnswered,
+    NotAuthorized
+}
+
+public sealed record QuestionActionResult(QuestionActionStatus Status);

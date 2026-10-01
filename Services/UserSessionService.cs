@@ -75,6 +75,7 @@ public sealed class UserSessionService(AppDbContext db)
     {
         session.State = UserSessionState.WaitingForAnonymousMessage;
         session.ReceiverUserId = receiverUserId;
+        session.QuestionId = null;
         session.UpdatedAt = DateTime.UtcNow;
     }
 
