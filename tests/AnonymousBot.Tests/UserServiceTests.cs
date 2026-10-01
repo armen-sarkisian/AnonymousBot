@@ -183,23 +183,6 @@ public sealed class UserServiceTests
         Assert.Equal(UserSessionState.WaitingForAnonymousMessage, session.State);
     }
 
-    [Fact]
-    public async Task ConsumeWaitingMessageAsync_ClearsSessionWithoutSavingMessageText()
-    {
-        await using var db = CreateDbContext();
-        var owner = await AddUserAsync(db, telegramUserId: 456, "owner-token");
-        var service = new UserSessionService(db);
-        await service.StartFromLinkAsync(senderTelegramUserId: 123, "owner-token");
-
-        var receiverUserId = await service.ConsumeWaitingMessageAsync(123);
-
-        var session = await db.UserSessions.SingleAsync();
-        Assert.Equal(owner.Id, receiverUserId);
-        Assert.Equal(UserSessionState.None, session.State);
-        Assert.Null(session.ReceiverUserId);
-        Assert.Empty(await db.Messages.ToListAsync());
-    }
-
     private static async Task<User> AddUserAsync(
         AppDbContext db,
         long telegramUserId,

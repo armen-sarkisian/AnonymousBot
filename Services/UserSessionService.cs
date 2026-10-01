@@ -71,29 +71,6 @@ public sealed class UserSessionService(AppDbContext db)
         }
     }
 
-    public async Task<int?> ConsumeWaitingMessageAsync(
-        long senderTelegramUserId,
-        CancellationToken cancellationToken = default)
-    {
-        var session = await db.UserSessions
-            .SingleOrDefaultAsync(
-                candidate => candidate.TelegramUserId == senderTelegramUserId &&
-                             candidate.State == UserSessionState.WaitingForAnonymousMessage,
-                cancellationToken);
-
-        if (session is null)
-        {
-            return null;
-        }
-
-        var receiverUserId = session.ReceiverUserId;
-        session.State = UserSessionState.None;
-        session.ReceiverUserId = null;
-        session.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
-        return receiverUserId;
-    }
-
     private static void SetWaitingState(UserSession session, int receiverUserId)
     {
         session.State = UserSessionState.WaitingForAnonymousMessage;

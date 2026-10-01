@@ -8,6 +8,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<TelegramMessage> Messages => Set<TelegramMessage>();
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<Question> Questions => Set<Question>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -27,6 +28,16 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne<User>()
                 .WithMany()
                 .HasForeignKey(session => session.ReceiverUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Question>(entity =>
+        {
+            entity.Property(question => question.Text).IsRequired();
+            entity.Property(question => question.Status).HasConversion<int>();
+            entity.HasOne(question => question.ReceiverUser)
+                .WithMany(user => user.Questions)
+                .HasForeignKey(question => question.ReceiverUserId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

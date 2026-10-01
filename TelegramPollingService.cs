@@ -30,23 +30,19 @@ public sealed class TelegramPollingService(
 		Update update,
 		CancellationToken cancellationToken)
 	{
-		if (update.Message?.Text is not { } text)
+		if (update.Message is not { } message || message.From is not { } telegramUser)
 		{
 			return;
 		}
 
-		var message = update.Message;
-		if (message.From is not { } telegramUser)
-		{
-			return;
-		}
-
+		var text = message.Text;
 		await using var scope = scopeFactory.CreateAsyncScope();
 		var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 		var userService = scope.ServiceProvider.GetRequiredService<UserService>();
 		var userSessionService = scope.ServiceProvider.GetRequiredService<UserSessionService>();
+		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
 
-		if (TryGetStartToken(text, out var token))
+		if (text is not null && TryGetStartToken(text, out var token))
 		{
 			if (token is not null)
 			{
@@ -101,7 +97,7 @@ public sealed class TelegramPollingService(
 
 			await SaveMessageAsync(db, message, text, cancellationToken);
 			await client.SendMessage(
-				chatId: message.Chat.Id,
+			chatId: message.Chat.Id,
 				text: "Добро пожаловать!",
 				cancellationToken: cancellationToken);
 			return;
@@ -116,8 +112,16 @@ public sealed class TelegramPollingService(
 			return;
 		}
 
-		if (await userSessionService.ConsumeWaitingMessageAsync(telegramUser.Id, cancellationToken) is not null)
+		if (text is null)
 		{
+			if (await questionService.IsWaitingForMessageAsync(telegramUser.Id, cancellationToken))
+			{
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Сейчас можно отправлять только текстовые сообщения.",
+					cancellationToken: cancellationToken);
+			}
+
 			return;
 		}
 
@@ -144,12 +148,51 @@ public sealed class TelegramPollingService(
 				return;
 			}
 
-			await SaveMessageAsync(db, message, text, cancellationToken);
-			await client.SendMessage(
-				chatId: message.Chat.Id,
+				await SaveMessageAsync(db, message, text, cancellationToken);
+				await client.SendMessage(
+					chatId: message.Chat.Id,
 				text: $"🔗 Твоя анонимная ссылка:\n{link.Link}\n\nОтправь эту ссылку друзьям, чтобы они могли отправлять тебе анонимные сообщения.",
 				cancellationToken: cancellationToken);
 			return;
+		}
+
+		var submission = await questionService.SubmitAsync(
+			telegramUser.Id,
+			text,
+			cancellationToken);
+
+		switch (submission.Status)
+		{
+			case QuestionSubmissionStatus.Sent:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "✅ Сообщение отправлено анонимно.",
+					cancellationToken: cancellationToken);
+				return;
+			case QuestionSubmissionStatus.ReceiverUnavailable:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Этот пользователь сейчас не принимает сообщения.",
+					cancellationToken: cancellationToken);
+				return;
+			case QuestionSubmissionStatus.SelfMessage:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Нельзя отправить анонимное сообщение самому себе.",
+					cancellationToken: cancellationToken);
+				return;
+			case QuestionSubmissionStatus.EmptyText:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Сообщение не может быть пустым.",
+					cancellationToken: cancellationToken);
+				return;
+			case QuestionSubmissionStatus.TooLong:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "❌ Сообщение слишком длинное. Сократи его и попробуй снова.",
+					cancellationToken: cancellationToken);
+				return;
 		}
 
 		await SaveMessageAsync(db, message, text, cancellationToken);
