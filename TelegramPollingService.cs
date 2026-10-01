@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 
 public sealed class TelegramPollingService(
 	ITelegramBotClient botClient,
@@ -104,8 +105,9 @@ public sealed class TelegramPollingService(
 
 			await SaveMessageAsync(db, message, text, cancellationToken);
 			await client.SendMessage(
-			chatId: message.Chat.Id,
+				chatId: message.Chat.Id,
 				text: "Добро пожаловать!",
+				replyMarkup: CreateMainMenuKeyboard(),
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -136,6 +138,17 @@ public sealed class TelegramPollingService(
 					cancellationToken: cancellationToken);
 			}
 
+			return;
+		}
+
+		if (IsMyQuestionsCommand(text))
+		{
+			await SendQuestionHistoryAsync(
+				client,
+				telegramUser.Id,
+				message.Chat.Id,
+				page: 1,
+				cancellationToken);
 			return;
 		}
 
@@ -200,9 +213,9 @@ public sealed class TelegramPollingService(
 				return;
 			}
 
-				await SaveMessageAsync(db, message, text, cancellationToken);
-				await client.SendMessage(
-					chatId: message.Chat.Id,
+			await SaveMessageAsync(db, message, text, cancellationToken);
+			await client.SendMessage(
+				chatId: message.Chat.Id,
 				text: $"🔗 Твоя анонимная ссылка:\n{link.Link}\n\nОтправь эту ссылку друзьям, чтобы они могли отправлять тебе анонимные сообщения.",
 				cancellationToken: cancellationToken);
 			return;
@@ -259,6 +272,18 @@ public sealed class TelegramPollingService(
 		CallbackQuery callbackQuery,
 		CancellationToken cancellationToken)
 	{
+		if (TryParseHistoryCallbackData(callbackQuery.Data, out var historyPage))
+		{
+			await SendQuestionHistoryAsync(
+				client,
+				callbackQuery.From.Id,
+				callbackQuery.Message?.Chat.Id ?? callbackQuery.From.Id,
+				historyPage,
+				cancellationToken);
+			await client.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+			return;
+		}
+
 		if (!TryParseCallbackData(callbackQuery.Data, out var action, out var questionId))
 		{
 			await client.AnswerCallbackQuery(
@@ -356,6 +381,100 @@ public sealed class TelegramPollingService(
 			chatId: callbackQuery.From.Id,
 			text: "✍️ Напиши свой ответ на этот вопрос.",
 			cancellationToken: cancellationToken);
+	}
+
+	private async Task SendQuestionHistoryAsync(
+		ITelegramBotClient client,
+		long telegramUserId,
+		long chatId,
+		int page,
+		CancellationToken cancellationToken)
+	{
+		await using var scope = scopeFactory.CreateAsyncScope();
+		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
+		var history = await questionService.GetMyQuestionsAsync(telegramUserId, page, cancellationToken);
+
+		if (!history.UserExists || history.IsEmpty)
+		{
+			await client.SendMessage(
+				chatId: chatId,
+				text: history.EmptyMessage ?? QuestionService.EmptyHistoryText,
+				replyMarkup: CreateMainMenuKeyboard(),
+				cancellationToken: cancellationToken);
+			return;
+		}
+
+		var displayParts = history.Items
+			.SelectMany(item => SplitForTelegram(item.ToDisplayText()))
+			.ToArray();
+		for (var index = 0; index < displayParts.Length; index++)
+		{
+			var replyMarkup = index == displayParts.Length - 1
+				? CreateHistoryKeyboard(history)
+				: null;
+			await client.SendMessage(
+				chatId: chatId,
+				text: displayParts[index],
+				replyMarkup: replyMarkup,
+				cancellationToken: cancellationToken);
+		}
+	}
+
+	private static ReplyKeyboardMarkup CreateMainMenuKeyboard() =>
+		new(new[] { new KeyboardButton("📨 Мои вопросы") })
+		{
+			ResizeKeyboard = true,
+			IsPersistent = true
+		};
+
+	private static InlineKeyboardMarkup? CreateHistoryKeyboard(QuestionHistoryPage history)
+	{
+		var buttons = new List<InlineKeyboardButton>();
+		if (history.HasPrevious)
+		{
+			buttons.Add(InlineKeyboardButton.WithCallbackData(
+				"⬅️ Назад",
+				$"my_questions:page:{history.Page - 1}"));
+		}
+
+		if (history.HasNext)
+		{
+			buttons.Add(InlineKeyboardButton.WithCallbackData(
+				"➡️ Далее",
+				$"my_questions:page:{history.Page + 1}"));
+		}
+
+		return buttons.Count == 0 ? null : new InlineKeyboardMarkup(buttons);
+	}
+
+	private static IEnumerable<string> SplitForTelegram(string text)
+	{
+		for (var offset = 0; offset < text.Length;)
+		{
+			var length = Math.Min(QuestionNotificationBuilder.TelegramMessageLimit, text.Length - offset);
+			if (offset + length < text.Length && char.IsHighSurrogate(text[offset + length - 1]))
+			{
+				length--;
+			}
+
+			yield return text.Substring(offset, length);
+			offset += length;
+		}
+	}
+
+	private static bool IsMyQuestionsCommand(string text) =>
+		string.Equals(text.Trim(), "📨 Мои вопросы", StringComparison.OrdinalIgnoreCase) ||
+		string.Equals(text.Trim(), "/my_questions", StringComparison.OrdinalIgnoreCase);
+
+	private static bool TryParseHistoryCallbackData(string? data, out int page)
+	{
+		page = 0;
+		var parts = data?.Split(':');
+		return parts is { Length: 3 } &&
+		       parts[0] == "my_questions" &&
+		       parts[1] == "page" &&
+		       int.TryParse(parts[2], out page) &&
+		       page > 0;
 	}
 
 	private static bool TryParseCallbackData(string? data, out string action, out int questionId)

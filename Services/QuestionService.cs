@@ -6,6 +6,56 @@ namespace AnonymousBot.Services;
 
 public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 {
+    public const int QuestionsPerPage = 5;
+    public const string EmptyHistoryText =
+        "📨 У тебя пока нет вопросов.\n\nПоделись своей ссылкой, чтобы получить первый анонимный вопрос.";
+
+    public async Task<QuestionHistoryPage> GetMyQuestionsAsync(
+        long telegramUserId,
+        int requestedPage,
+        CancellationToken cancellationToken = default)
+    {
+        if (requestedPage < 1)
+        {
+            requestedPage = 1;
+        }
+
+        var userId = await FindUserIdAsync(telegramUserId, cancellationToken);
+        if (userId is null)
+        {
+            return new QuestionHistoryPage(false, 0, 1, 0, []);
+        }
+
+        var questions = db.Questions
+            .AsNoTracking()
+            .Where(question =>
+                question.ReceiverUserId == userId &&
+                question.Status != QuestionStatus.Deleted);
+
+        var totalCount = await questions.CountAsync(cancellationToken);
+        var totalPages = Math.Max(1, (int)Math.Ceiling(totalCount / (double)QuestionsPerPage));
+        var page = Math.Min(requestedPage, totalPages);
+        var pageItems = await questions
+            .OrderBy(question => question.CreatedAt)
+            .ThenBy(question => question.Id)
+            .Skip((page - 1) * QuestionsPerPage)
+            .Take(QuestionsPerPage)
+            .Select(question => new QuestionHistoryItem(
+                question.Id,
+                question.Text,
+                question.CreatedAt,
+                question.Answer == null ? null : question.Answer.Text))
+            .ToListAsync(cancellationToken);
+        var items = pageItems
+            .Select((item, index) => item with
+            {
+                Number = (page - 1) * QuestionsPerPage + index + 1
+            })
+            .ToArray();
+
+        return new QuestionHistoryPage(true, totalCount, page, totalPages, items);
+    }
+
     public async Task<QuestionActionResult> DeleteAsync(
         long telegramUserId,
         int questionId,
@@ -143,3 +193,24 @@ public enum QuestionActionStatus
 }
 
 public sealed record QuestionActionResult(QuestionActionStatus Status);
+
+public sealed record QuestionHistoryItem(int Id, string Text, DateTime CreatedAt, string? AnswerText)
+{
+    public int Number { get; init; }
+
+    public string ToDisplayText() =>
+        $"📨 Вопрос #{Number}\n\n{Text}\n\n💬 Мой ответ:\n{AnswerText ?? "Пока нет ответа"}\n\n📅 Получен: {CreatedAt:dd.MM.yyyy HH:mm}";
+}
+
+public sealed record QuestionHistoryPage(
+    bool UserExists,
+    int TotalCount,
+    int Page,
+    int TotalPages,
+    IReadOnlyList<QuestionHistoryItem> Items)
+{
+    public bool IsEmpty => UserExists && TotalCount == 0;
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+    public string? EmptyMessage => TotalCount == 0 ? QuestionService.EmptyHistoryText : null;
+}
