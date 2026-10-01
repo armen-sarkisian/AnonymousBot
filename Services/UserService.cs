@@ -72,6 +72,31 @@ public sealed class UserService(AppDbContext db)
             .Select(user => user.IsBlocked)
             .SingleOrDefaultAsync(cancellationToken);
 
+    public async Task<UserLinkResult> GetLinkAsync(
+        long telegramUserId,
+        string? botUsername,
+        CancellationToken cancellationToken = default)
+    {
+        var token = await db.Users
+            .Where(user => user.TelegramUserId == telegramUserId)
+            .Select(user => user.Token)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (token is null)
+        {
+            return new UserLinkResult(UserExists: false, Link: null);
+        }
+
+        if (string.IsNullOrWhiteSpace(botUsername))
+        {
+            return new UserLinkResult(UserExists: true, Link: null);
+        }
+
+        return new UserLinkResult(
+            UserExists: true,
+            Link: TelegramLinkBuilder.Create(botUsername, token));
+    }
+
     private async Task UpdateProfileAsync(
         User user,
         string? username,
@@ -101,4 +126,25 @@ public sealed class UserService(AppDbContext db)
 public sealed record UserStartResult(bool IsNewUser, bool IsBlocked)
 {
     public bool HasAccess => !IsBlocked;
+}
+
+public sealed record UserLinkResult(bool UserExists, string? Link);
+
+public static class TelegramLinkBuilder
+{
+    public static string Create(string botUsername, string token)
+    {
+        var normalizedUsername = botUsername.Trim().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(normalizedUsername))
+        {
+            throw new ArgumentException("Bot username must be configured.", nameof(botUsername));
+        }
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            throw new ArgumentException("User token cannot be empty.", nameof(token));
+        }
+
+        return $"https://t.me/{normalizedUsername}?start={Uri.EscapeDataString(token)}";
+    }
 }

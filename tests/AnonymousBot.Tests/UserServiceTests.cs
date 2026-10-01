@@ -78,6 +78,49 @@ public sealed class UserServiceTests
         Assert.Equal(1, await db.Users.CountAsync());
     }
 
+    [Fact]
+    public void TelegramLinkBuilder_CreatesDeepLink()
+    {
+        var link = TelegramLinkBuilder.Create("@example_bot", "user-token");
+
+        Assert.Equal("https://t.me/example_bot?start=user-token", link);
+    }
+
+    [Fact]
+    public async Task GetLinkAsync_RepeatedCallsKeepTheSameToken()
+    {
+        await using var db = CreateDbContext();
+        var user = new User
+        {
+            TelegramUserId = 123,
+            Token = "permanent-token"
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        var service = new UserService(db);
+
+        var firstLink = await service.GetLinkAsync(123, "example_bot");
+        var secondLink = await service.GetLinkAsync(123, "example_bot");
+
+        Assert.Equal("https://t.me/example_bot?start=permanent-token", firstLink.Link);
+        Assert.Equal(firstLink, secondLink);
+        Assert.True(firstLink.UserExists);
+        Assert.Equal("permanent-token", (await db.Users.SingleAsync()).Token);
+    }
+
+    [Fact]
+    public async Task GetLinkAsync_ReturnsNullForMissingUserWithoutCreatingOne()
+    {
+        await using var db = CreateDbContext();
+        var service = new UserService(db);
+
+        var link = await service.GetLinkAsync(telegramUserId: 123, "example_bot");
+
+        Assert.False(link.UserExists);
+        Assert.Null(link.Link);
+        Assert.Empty(await db.Users.ToListAsync());
+    }
+
     private static AppDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()

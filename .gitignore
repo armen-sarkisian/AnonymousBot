@@ -4,5 +4,6 @@ obj/
 *.user
 *.suo
 appsettings.Local.json
+appsettings.json
 .idea/
 .vscode/

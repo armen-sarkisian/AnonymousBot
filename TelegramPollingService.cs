@@ -9,6 +9,7 @@ using Telegram.Bot.Types;
 public sealed class TelegramPollingService(
 	ITelegramBotClient botClient,
 	IServiceScopeFactory scopeFactory,
+	IConfiguration configuration,
 	ILogger<TelegramPollingService> logger) : BackgroundService
 {
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -78,6 +79,37 @@ public sealed class TelegramPollingService(
 			return;
 		}
 
+		if (IsLinkCommand(text))
+		{
+			var botUsername = configuration["Telegram:BotUsername"];
+			var link = await userService.GetLinkAsync(telegramUser.Id, botUsername, cancellationToken);
+			if (!link.UserExists)
+			{
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "Сначала выполните команду /start.",
+					cancellationToken: cancellationToken);
+				return;
+			}
+
+			if (link.Link is null)
+			{
+				logger.LogError("Telegram bot username is not configured.");
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: "Не удалось создать ссылку. Попробуйте позже.",
+					cancellationToken: cancellationToken);
+				return;
+			}
+
+			await SaveMessageAsync(db, message, text, cancellationToken);
+			await client.SendMessage(
+				chatId: message.Chat.Id,
+				text: $"🔗 Твоя анонимная ссылка:\n{link.Link}\n\nОтправь эту ссылку друзьям, чтобы они могли отправлять тебе анонимные сообщения.",
+				cancellationToken: cancellationToken);
+			return;
+		}
+
 		await SaveMessageAsync(db, message, text, cancellationToken);
 		await client.SendMessage(
 			chatId: message.Chat.Id,
@@ -89,6 +121,12 @@ public sealed class TelegramPollingService(
 	{
 		var command = text.Split(' ', 2)[0].Split('@')[0];
 		return string.Equals(command, "/start", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool IsLinkCommand(string text)
+	{
+		var command = text.Split(' ', 2)[0].Split('@')[0];
+		return string.Equals(command, "/link", StringComparison.OrdinalIgnoreCase);
 	}
 
 	private static async Task SaveMessageAsync(

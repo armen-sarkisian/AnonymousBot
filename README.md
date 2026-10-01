@@ -15,6 +15,7 @@ Bot token задавайте через переменную окружения.
 
 ```powershell
 $env:Telegram__BotToken = "<telegram-bot-token>"
+$env:Telegram__BotUsername = "<bot-username-without-at-sign>"
 $env:ConnectionStrings__DefaultConnection = "Server=localhost;Database=AnonymousBot;Trusted_Connection=True;TrustServerCertificate=True;"
 dotnet run --project .\AnonymousBot.csproj
 ```
@@ -26,3 +27,5 @@ dotnet run --project .\AnonymousBot.csproj
 Схема базы управляется через EF Core migrations. Миграции применяются при старте приложения; строку подключения можно переопределить через `ConnectionStrings__DefaultConnection`. Для создания новой миграции используйте `dotnet ef migrations add <MigrationName>`.
 
 Команда `/start` регистрирует пользователя по Telegram ID, сохраняет имя и username и отвечает `Добро пожаловать!`. Для заблокированных пользователей бот сообщает, что доступ ограничен.
+
+Команда `/link` отправляет зарегистрированному пользователю его постоянную персональную ссылку. Имя бота задаётся через `Telegram:BotUsername` или переменную окружения `Telegram__BotUsername`.
