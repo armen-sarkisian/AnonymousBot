@@ -50,7 +50,8 @@ public sealed class TelegramPollingService(
 		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
 		var answerService = scope.ServiceProvider.GetRequiredService<AnswerService>();
 
-		if (text is not null && TryGetStartToken(text, out var token))
+		if (text is not null &&
+			(TryGetStartToken(text, out var token) || IsStartMenuCommand(text)))
 		{
 			if (token is not null)
 			{
@@ -421,7 +422,11 @@ public sealed class TelegramPollingService(
 	}
 
 	private static ReplyKeyboardMarkup CreateMainMenuKeyboard() =>
-		new(new[] { new KeyboardButton("📨 Мои вопросы") })
+		new(new[]
+		{
+			new[] { new KeyboardButton("🚀 Запуск бота"), new KeyboardButton("🔗 Создать персональную ссылку") },
+			new[] { new KeyboardButton("📨 Мои вопросы") }
+		})
 		{
 			ResizeKeyboard = true,
 			IsPersistent = true
@@ -465,6 +470,9 @@ public sealed class TelegramPollingService(
 	private static bool IsMyQuestionsCommand(string text) =>
 		string.Equals(text.Trim(), "📨 Мои вопросы", StringComparison.OrdinalIgnoreCase) ||
 		string.Equals(text.Trim(), "/my_questions", StringComparison.OrdinalIgnoreCase);
+
+	private static bool IsStartMenuCommand(string text) =>
+		string.Equals(text.Trim(), "🚀 Запуск бота", StringComparison.OrdinalIgnoreCase);
 
 	private static bool TryParseHistoryCallbackData(string? data, out int page)
 	{
@@ -516,7 +524,8 @@ public sealed class TelegramPollingService(
 	private static bool IsLinkCommand(string text)
 	{
 		var command = text.Split(' ', 2)[0].Split('@')[0];
-		return string.Equals(command, "/link", StringComparison.OrdinalIgnoreCase);
+		return string.Equals(command, "/link", StringComparison.OrdinalIgnoreCase) ||
+		       string.Equals(text.Trim(), "🔗 Создать персональную ссылку", StringComparison.OrdinalIgnoreCase);
 	}
 
 	private static async Task SaveMessageAsync(
