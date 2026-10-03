@@ -7,14 +7,17 @@ public sealed record AnswerNotification(long OwnerTelegramUserId, string DraftTe
 public static class AnswerNotificationBuilder
 {
     public const int TelegramMessageLimit = 4096;
-    private const string QuestionPrefix = "Анонимный вопрос:\n\n";
-    private const string AnswerSeparator = "\n\nМой ответ:\n\n";
 
     public static int MaximumAnswerLength(string questionText) =>
-        TelegramMessageLimit - QuestionPrefix.Length - questionText.Length - AnswerSeparator.Length;
+        Enum.GetValues<BotLanguage>()
+            .Min(language => TelegramMessageLimit -
+                             BotMessages.For(language).AnswerDraft(questionText, string.Empty).Length);
 
-    public static string CreateDraft(string questionText, string answerText) =>
-        $"{QuestionPrefix}{questionText}{AnswerSeparator}{answerText}";
+    public static string CreateDraft(
+        string questionText,
+        string answerText,
+        BotLanguage language = BotLanguage.Russian) =>
+        BotMessages.For(language).AnswerDraft(questionText, answerText);
 
     public static string CreateCopyCallbackData(int questionId)
     {
@@ -26,9 +29,13 @@ public static class AnswerNotificationBuilder
         return $"answer:copy:{questionId}";
     }
 
-    public static AnswerNotification Create(long ownerTelegramUserId, Question question, Answer answer) =>
+    public static AnswerNotification Create(
+        long ownerTelegramUserId,
+        Question question,
+        Answer answer,
+        BotLanguage language = BotLanguage.Russian) =>
         new(
             ownerTelegramUserId,
-            CreateDraft(question.Text, answer.Text),
+            CreateDraft(question.Text, answer.Text, language),
             CreateCopyCallbackData(question.Id));
 }

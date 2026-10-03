@@ -253,7 +253,11 @@ public sealed class QuestionActionTests
 
     private sealed class RecordingQuestionNotifier : IQuestionNotifier
     {
-        public Task NotifyAsync(long receiverTelegramUserId, Question question, CancellationToken cancellationToken) =>
+        public Task NotifyAsync(
+            long receiverTelegramUserId,
+            BotLanguage language,
+            Question question,
+            CancellationToken cancellationToken) =>
             Task.CompletedTask;
     }
 
@@ -268,11 +272,12 @@ public sealed class QuestionActionTests
 
         public Task NotifyAsync(
             long ownerTelegramUserId,
+            BotLanguage language,
             Question question,
             Answer answer,
             CancellationToken cancellationToken)
         {
-            var notification = AnswerNotificationBuilder.Create(ownerTelegramUserId, question, answer);
+            var notification = AnswerNotificationBuilder.Create(ownerTelegramUserId, question, answer, language);
             Notifications.Add(notification);
             RecipientTelegramUserId = ownerTelegramUserId;
             DraftText = notification.DraftText;
@@ -285,6 +290,7 @@ public sealed class QuestionActionTests
 
         public Task SendDraftAsync(
             long ownerTelegramUserId,
+            BotLanguage language,
             Question question,
             Answer answer,
             CancellationToken cancellationToken) =>

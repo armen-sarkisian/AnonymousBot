@@ -12,6 +12,7 @@ public sealed class UserService(AppDbContext db)
         long telegramUserId,
         string? username,
         string? firstName,
+        string? languageCode = null,
         CancellationToken cancellationToken = default)
     {
         var existingUser = await db.Users
@@ -20,7 +21,7 @@ public sealed class UserService(AppDbContext db)
         if (existingUser is not null)
         {
             await UpdateProfileAsync(existingUser, username, firstName, cancellationToken);
-            return new UserStartResult(IsNewUser: false, IsBlocked: existingUser.IsBlocked);
+            return new UserStartResult(IsNewUser: false, IsBlocked: existingUser.IsBlocked, existingUser.Language);
         }
 
         for (var attempt = 0; attempt < 3; attempt++)
@@ -30,6 +31,7 @@ public sealed class UserService(AppDbContext db)
                 TelegramUserId = telegramUserId,
                 Username = username,
                 FirstName = firstName,
+                Language = BotMessages.FromTelegramLanguageCode(languageCode),
                 Token = CreateToken(),
                 CreatedAt = DateTime.UtcNow,
                 IsBlocked = false
@@ -39,7 +41,7 @@ public sealed class UserService(AppDbContext db)
             try
             {
                 await db.SaveChangesAsync(cancellationToken);
-                return new UserStartResult(IsNewUser: true, IsBlocked: false);
+                return new UserStartResult(IsNewUser: true, IsBlocked: false, user.Language);
             }
             catch (DbUpdateException exception) when (IsUniqueConstraintViolation(exception))
             {
@@ -53,7 +55,7 @@ public sealed class UserService(AppDbContext db)
                 if (existingUser is not null)
                 {
                     await UpdateProfileAsync(existingUser, username, firstName, cancellationToken);
-                    return new UserStartResult(IsNewUser: false, IsBlocked: existingUser.IsBlocked);
+                    return new UserStartResult(IsNewUser: false, IsBlocked: existingUser.IsBlocked, existingUser.Language);
                 }
 
                 if (attempt == 2)
@@ -71,6 +73,37 @@ public sealed class UserService(AppDbContext db)
             .Where(user => user.TelegramUserId == telegramUserId)
             .Select(user => user.IsBlocked)
             .SingleOrDefaultAsync(cancellationToken);
+
+    public async Task<BotLanguage> GetLanguageAsync(
+        long telegramUserId,
+        string? fallbackLanguageCode = null,
+        CancellationToken cancellationToken = default)
+    {
+        var language = await db.Users
+            .Where(user => user.TelegramUserId == telegramUserId)
+            .Select(user => (BotLanguage?)user.Language)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return language ?? BotMessages.FromTelegramLanguageCode(fallbackLanguageCode);
+    }
+
+    public async Task<bool> SetLanguageAsync(
+        long telegramUserId,
+        BotLanguage language,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await db.Users.SingleOrDefaultAsync(
+            candidate => candidate.TelegramUserId == telegramUserId,
+            cancellationToken);
+        if (user is null)
+        {
+            return false;
+        }
+
+        user.Language = language;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
 
     public async Task<UserLinkResult> GetLinkAsync(
         long telegramUserId,
@@ -123,7 +156,7 @@ public sealed class UserService(AppDbContext db)
         exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
 }
 
-public sealed record UserStartResult(bool IsNewUser, bool IsBlocked)
+public sealed record UserStartResult(bool IsNewUser, bool IsBlocked, BotLanguage Language)
 {
     public bool HasAccess => !IsBlocked;
 }

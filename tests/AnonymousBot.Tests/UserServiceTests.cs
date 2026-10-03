@@ -30,6 +30,60 @@ public sealed class UserServiceTests
         Assert.InRange(user.CreatedAt, before, DateTime.UtcNow);
     }
 
+    [Theory]
+    [InlineData("ru", BotLanguage.Russian)]
+    [InlineData("uk", BotLanguage.Ukrainian)]
+    [InlineData("en-US", BotLanguage.English)]
+    [InlineData("de", BotLanguage.Russian)]
+    [InlineData(null, BotLanguage.Russian)]
+    public async Task StartAsync_DetectsTelegramLanguageForNewUsers(
+        string? languageCode,
+        BotLanguage expectedLanguage)
+    {
+        await using var db = CreateDbContext();
+        var service = new UserService(db);
+
+        var result = await service.StartAsync(123, "test_user", "Test", languageCode);
+
+        Assert.Equal(expectedLanguage, result.Language);
+        Assert.Equal(expectedLanguage, (await db.Users.SingleAsync()).Language);
+    }
+
+    [Fact]
+    public async Task StartAsync_DoesNotReplaceSavedLanguageOnRepeatedStart()
+    {
+        await using var db = CreateDbContext();
+        var service = new UserService(db);
+        await service.StartAsync(123, "test_user", "Test", "en");
+
+        var result = await service.StartAsync(123, "test_user", "Test", "ru");
+
+        Assert.Equal(BotLanguage.English, result.Language);
+        Assert.Equal(BotLanguage.English, (await db.Users.SingleAsync()).Language);
+    }
+
+    [Fact]
+    public async Task SetLanguageAsync_PersistsSelectionForRegisteredUser()
+    {
+        await using var db = CreateDbContext();
+        var service = new UserService(db);
+        await service.StartAsync(123, "test_user", "Test");
+
+        var saved = await service.SetLanguageAsync(123, BotLanguage.Ukrainian);
+
+        Assert.True(saved);
+        Assert.Equal(BotLanguage.Ukrainian, await service.GetLanguageAsync(123));
+    }
+
+    [Fact]
+    public void FromTelegramLanguageCode_MapsSupportedLanguagesAndFallback()
+    {
+        Assert.Equal(BotLanguage.Russian, BotMessages.FromTelegramLanguageCode("ru-RU"));
+        Assert.Equal(BotLanguage.Ukrainian, BotMessages.FromTelegramLanguageCode("uk"));
+        Assert.Equal(BotLanguage.English, BotMessages.FromTelegramLanguageCode("en"));
+        Assert.Equal(BotLanguage.Russian, BotMessages.FromTelegramLanguageCode("fr"));
+    }
+
     [Fact]
     public async Task StartAsync_RepeatedStartDoesNotCreateAnotherUser()
     {

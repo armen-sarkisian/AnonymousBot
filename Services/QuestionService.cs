@@ -7,13 +7,11 @@ namespace AnonymousBot.Services;
 public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 {
     public const int QuestionsPerPage = 5;
-    public const string EmptyHistoryText =
-        "📨 У тебя пока нет вопросов.\n\nПоделись своей ссылкой, чтобы получить первый анонимный вопрос.";
-
     public async Task<QuestionHistoryPage> GetMyQuestionsAsync(
         long telegramUserId,
         int requestedPage,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        BotLanguage language = BotLanguage.Russian)
     {
         if (requestedPage < 1)
         {
@@ -23,7 +21,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         var userId = await FindUserIdAsync(telegramUserId, cancellationToken);
         if (userId is null)
         {
-            return new QuestionHistoryPage(false, 0, 1, 0, []);
+            return new QuestionHistoryPage(false, 0, 1, 0, [], language);
         }
 
         var questions = db.Questions
@@ -44,7 +42,8 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
                 question.Id,
                 question.Text,
                 question.CreatedAt,
-                question.Answer == null ? null : question.Answer.Text))
+                question.Answer == null ? null : question.Answer.Text,
+                language))
             .ToListAsync(cancellationToken);
         var items = pageItems
             .Select((item, index) => item with
@@ -53,7 +52,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
             })
             .ToArray();
 
-        return new QuestionHistoryPage(true, totalCount, page, totalPages, items);
+        return new QuestionHistoryPage(true, totalCount, page, totalPages, items, language);
     }
 
     public async Task<QuestionActionResult> DeleteAsync(
@@ -152,7 +151,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         ClearSession(session);
         await db.SaveChangesAsync(cancellationToken);
 
-        await notifier.NotifyAsync(receiver.TelegramUserId, question, cancellationToken);
+        await notifier.NotifyAsync(receiver.TelegramUserId, receiver.Language, question, cancellationToken);
         return new QuestionSubmissionResult(QuestionSubmissionStatus.Sent);
     }
 
@@ -194,12 +193,17 @@ public enum QuestionActionStatus
 
 public sealed record QuestionActionResult(QuestionActionStatus Status);
 
-public sealed record QuestionHistoryItem(int Id, string Text, DateTime CreatedAt, string? AnswerText)
+public sealed record QuestionHistoryItem(
+    int Id,
+    string Text,
+    DateTime CreatedAt,
+    string? AnswerText,
+    BotLanguage Language = BotLanguage.Russian)
 {
     public int Number { get; init; }
 
     public string ToDisplayText() =>
-        $"📨 Вопрос #{Number}\n\n{Text}\n\n💬 Мой ответ:\n{AnswerText ?? "Пока нет ответа"}\n\n📅 Получен: {CreatedAt:dd.MM.yyyy HH:mm}";
+        BotMessages.For(Language).QuestionHistoryItem(Number, Text, AnswerText, CreatedAt);
 }
 
 public sealed record QuestionHistoryPage(
@@ -207,10 +211,11 @@ public sealed record QuestionHistoryPage(
     int TotalCount,
     int Page,
     int TotalPages,
-    IReadOnlyList<QuestionHistoryItem> Items)
+    IReadOnlyList<QuestionHistoryItem> Items,
+    BotLanguage Language = BotLanguage.Russian)
 {
     public bool IsEmpty => UserExists && TotalCount == 0;
     public bool HasPrevious => Page > 1;
     public bool HasNext => Page < TotalPages;
-    public string? EmptyMessage => TotalCount == 0 ? QuestionService.EmptyHistoryText : null;
+    public string? EmptyMessage => TotalCount == 0 ? BotMessages.For(Language).EmptyHistory : null;
 }

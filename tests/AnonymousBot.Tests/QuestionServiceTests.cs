@@ -113,7 +113,8 @@ public sealed class QuestionServiceTests
             answer => Assert.Equal("question:answer:42", answer.CallbackData),
             delete => Assert.Equal("question:delete:42", delete.CallbackData),
             report => Assert.Equal("question:report:42", report.CallbackData));
-        Assert.Contains(QuestionNotificationBuilder.Header, notification.Text);
+        Assert.Contains(BotMessages.For(BotLanguage.Russian).QuestionNotification(string.Empty).Trim(),
+            notification.Text);
         Assert.Contains("anonymous text", notification.Text);
     }
 
@@ -193,6 +194,7 @@ public sealed class QuestionServiceTests
 
         public Task NotifyAsync(
             long receiverTelegramUserId,
+            BotLanguage language,
             Question question,
             CancellationToken cancellationToken)
         {

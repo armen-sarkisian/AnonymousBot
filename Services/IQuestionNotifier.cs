@@ -4,5 +4,9 @@ namespace AnonymousBot.Services;
 
 public interface IQuestionNotifier
 {
-    Task NotifyAsync(long receiverTelegramUserId, Question question, CancellationToken cancellationToken);
+    Task NotifyAsync(
+        long receiverTelegramUserId,
+        BotLanguage language,
+        Question question,
+        CancellationToken cancellationToken);
 }

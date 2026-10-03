@@ -209,7 +209,11 @@ public sealed class QuestionHistoryTests
 
     private sealed class RecordingQuestionNotifier : IQuestionNotifier
     {
-        public Task NotifyAsync(long receiverTelegramUserId, Question question, CancellationToken cancellationToken) =>
+        public Task NotifyAsync(
+            long receiverTelegramUserId,
+            BotLanguage language,
+            Question question,
+            CancellationToken cancellationToken) =>
             Task.CompletedTask;
     }
 }

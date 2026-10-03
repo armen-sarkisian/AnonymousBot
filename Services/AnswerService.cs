@@ -92,7 +92,7 @@ public sealed class AnswerService(AppDbContext db, IAnswerNotifier notifier)
             return new AnswerSubmissionResult(AnswerSubmissionStatus.AlreadyAnswered);
         }
 
-        await notifier.NotifyAsync(user!.TelegramUserId, question, answer, cancellationToken);
+        await notifier.NotifyAsync(user!.TelegramUserId, user.Language, question, answer, cancellationToken);
         return new AnswerSubmissionResult(AnswerSubmissionStatus.Saved);
     }
 
@@ -124,7 +124,7 @@ public sealed class AnswerService(AppDbContext db, IAnswerNotifier notifier)
             ? new AnswerDraftResult(AnswerDraftStatus.NotFoundOrNotOwner, null)
             : new AnswerDraftResult(
                 AnswerDraftStatus.Ready,
-                AnswerNotificationBuilder.Create(user.TelegramUserId, question, answer));
+                AnswerNotificationBuilder.Create(user.TelegramUserId, question, answer, user.Language));
     }
 
     public async Task<QuestionActionStatus> BeginAnswerAsync(

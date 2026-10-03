@@ -49,9 +49,15 @@ public sealed class TelegramPollingService(
 		var userSessionService = scope.ServiceProvider.GetRequiredService<UserSessionService>();
 		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
 		var answerService = scope.ServiceProvider.GetRequiredService<AnswerService>();
+		var language = await userService.GetLanguageAsync(
+			telegramUser.Id,
+			telegramUser.LanguageCode,
+			cancellationToken);
+		var messages = BotMessages.For(language);
 
 		if (text is not null &&
-			(TryGetStartToken(text, out var token) || IsStartMenuCommand(text)))
+			(TryGetStartToken(text, out var token) ||
+			 IsStartMenuCommand(text, language)))
 		{
 			if (token is not null)
 			{
@@ -59,7 +65,7 @@ public sealed class TelegramPollingService(
 				{
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "Доступ к боту ограничен.",
+						text: messages.AccessRestricted,
 						cancellationToken: cancellationToken);
 					return;
 				}
@@ -73,18 +79,18 @@ public sealed class TelegramPollingService(
 				{
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "❌ Ссылка недействительна или больше не существует.",
+						text: messages.InvalidLink,
 						cancellationToken: cancellationToken);
 					return;
 				}
 
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "💬 Ты можешь отправить анонимное сообщение этому пользователю.",
+					text: messages.AnonymousMessagePrompt,
 					cancellationToken: cancellationToken);
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "Напиши сообщение следующим сообщением.",
+					text: messages.WriteNextMessage,
 					cancellationToken: cancellationToken);
 				return;
 			}
@@ -93,13 +99,16 @@ public sealed class TelegramPollingService(
 				telegramUser.Id,
 				telegramUser.Username,
 				telegramUser.FirstName,
+				telegramUser.LanguageCode,
 				cancellationToken);
+			language = result.Language;
+			messages = BotMessages.For(language);
 
 			if (!result.HasAccess)
 			{
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "Доступ к боту ограничен.",
+					text: messages.AccessRestricted,
 					cancellationToken: cancellationToken);
 				return;
 			}
@@ -107,8 +116,8 @@ public sealed class TelegramPollingService(
 			await SaveMessageAsync(db, message, text, cancellationToken);
 			await client.SendMessage(
 				chatId: message.Chat.Id,
-				text: "Добро пожаловать!",
-				replyMarkup: CreateMainMenuKeyboard(),
+				text: messages.Welcome,
+				replyMarkup: CreateMainMenuKeyboard(language),
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -117,7 +126,7 @@ public sealed class TelegramPollingService(
 		{
 			await client.SendMessage(
 				chatId: message.Chat.Id,
-				text: "Доступ к боту ограничен.",
+				text: messages.AccessRestricted,
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -128,28 +137,39 @@ public sealed class TelegramPollingService(
 			{
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Ответ пока можно отправить только текстом.",
+					text: messages.NonTextAnswer,
 					cancellationToken: cancellationToken);
 			}
 			else if (await questionService.IsWaitingForMessageAsync(telegramUser.Id, cancellationToken))
 			{
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Сейчас можно отправлять только текстовые сообщения.",
+					text: messages.NonTextQuestion,
 					cancellationToken: cancellationToken);
 			}
 
 			return;
 		}
 
-		if (IsMyQuestionsCommand(text))
+		if (IsMyQuestionsCommand(text, language))
 		{
 			await SendQuestionHistoryAsync(
 				client,
 				telegramUser.Id,
 				message.Chat.Id,
 				page: 1,
-				cancellationToken);
+				cancellationToken,
+				language);
+			return;
+		}
+
+		if (IsLanguageCommand(text, language))
+		{
+			await client.SendMessage(
+				chatId: message.Chat.Id,
+				text: messages.ChooseLanguage,
+				replyMarkup: CreateLanguageKeyboard(messages),
+				cancellationToken: cancellationToken);
 			return;
 		}
 
@@ -167,31 +187,31 @@ public sealed class TelegramPollingService(
 				case AnswerSubmissionStatus.QuestionUnavailable:
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "❌ У тебя нет доступа к этому вопросу.",
+						text: messages.NoAccessToQuestion,
 						cancellationToken: cancellationToken);
 					return;
 				case AnswerSubmissionStatus.AlreadyAnswered:
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "На этот вопрос уже сохранён ответ.",
+						text: messages.AlreadyAnswered,
 						cancellationToken: cancellationToken);
 					return;
 				case AnswerSubmissionStatus.EmptyText:
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "❌ Ответ не может быть пустым.",
+						text: messages.EmptyAnswer,
 						cancellationToken: cancellationToken);
 					return;
 				case AnswerSubmissionStatus.TooLong:
 					await client.SendMessage(
 						chatId: message.Chat.Id,
-						text: "❌ Ответ слишком длинный. Сократи его и попробуй снова.",
+						text: messages.AnswerTooLong,
 						cancellationToken: cancellationToken);
 					return;
 			}
 		}
 
-		if (IsLinkCommand(text))
+		if (IsLinkCommand(text, language))
 		{
 			var botUsername = configuration["Telegram:BotUsername"];
 			var link = await userService.GetLinkAsync(telegramUser.Id, botUsername, cancellationToken);
@@ -199,7 +219,7 @@ public sealed class TelegramPollingService(
 			{
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "Сначала выполните команду /start.",
+					text: messages.StartFirst,
 					cancellationToken: cancellationToken);
 				return;
 			}
@@ -209,7 +229,7 @@ public sealed class TelegramPollingService(
 				logger.LogError("Telegram bot username is not configured.");
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "Не удалось создать ссылку. Попробуйте позже.",
+					text: messages.LinkUnavailable,
 					cancellationToken: cancellationToken);
 				return;
 			}
@@ -217,7 +237,7 @@ public sealed class TelegramPollingService(
 			await SaveMessageAsync(db, message, text, cancellationToken);
 			await client.SendMessage(
 				chatId: message.Chat.Id,
-				text: $"🔗 Твоя анонимная ссылка:\n{link.Link}\n\nОтправь эту ссылку друзьям, чтобы они могли отправлять тебе анонимные сообщения.",
+				text: $"{messages.PersonalLink(link.Link)}\n\n{messages.LinkDescription}",
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -232,31 +252,31 @@ public sealed class TelegramPollingService(
 			case QuestionSubmissionStatus.Sent:
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "✅ Сообщение отправлено анонимно.",
+					text: messages.MessageSent,
 					cancellationToken: cancellationToken);
 				return;
 			case QuestionSubmissionStatus.ReceiverUnavailable:
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Этот пользователь сейчас не принимает сообщения.",
+					text: messages.ReceiverUnavailable,
 					cancellationToken: cancellationToken);
 				return;
 			case QuestionSubmissionStatus.SelfMessage:
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Нельзя отправить анонимное сообщение самому себе.",
+					text: messages.SelfMessage,
 					cancellationToken: cancellationToken);
 				return;
 			case QuestionSubmissionStatus.EmptyText:
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Сообщение не может быть пустым.",
+					text: messages.EmptyMessage,
 					cancellationToken: cancellationToken);
 				return;
 			case QuestionSubmissionStatus.TooLong:
 				await client.SendMessage(
 					chatId: message.Chat.Id,
-					text: "❌ Сообщение слишком длинное. Сократи его и попробуй снова.",
+					text: messages.MessageTooLong,
 					cancellationToken: cancellationToken);
 				return;
 		}
@@ -264,7 +284,7 @@ public sealed class TelegramPollingService(
 		await SaveMessageAsync(db, message, text, cancellationToken);
 		await client.SendMessage(
 			chatId: message.Chat.Id,
-			text: $"You said: {text}",
+			text: messages.Echo(text),
 			cancellationToken: cancellationToken);
 	}
 
@@ -273,23 +293,62 @@ public sealed class TelegramPollingService(
 		CallbackQuery callbackQuery,
 		CancellationToken cancellationToken)
 	{
+		if (TryParseLanguageCallbackData(callbackQuery.Data, out var selectedLanguage))
+		{
+			await using var languageScope = scopeFactory.CreateAsyncScope();
+			var userService = languageScope.ServiceProvider.GetRequiredService<UserService>();
+			var saved = await userService.SetLanguageAsync(
+				callbackQuery.From.Id,
+				selectedLanguage,
+				cancellationToken);
+			var language = saved
+				? selectedLanguage
+				: BotMessages.FromTelegramLanguageCode(callbackQuery.From.LanguageCode);
+			var languageMessages = BotMessages.For(language);
+
+			await client.AnswerCallbackQuery(
+				callbackQuery.Id,
+				text: saved ? languageMessages.LanguageChanged : languageMessages.StartFirst,
+				showAlert: !saved,
+				cancellationToken: cancellationToken);
+			if (saved)
+			{
+				await client.SendMessage(
+					chatId: callbackQuery.Message?.Chat.Id ?? callbackQuery.From.Id,
+					text: languageMessages.LanguageChanged,
+					replyMarkup: CreateMainMenuKeyboard(language),
+					cancellationToken: cancellationToken);
+			}
+
+			return;
+		}
+
 		if (TryParseHistoryCallbackData(callbackQuery.Data, out var historyPage))
 		{
+			await using var historyScope = scopeFactory.CreateAsyncScope();
+			var userService = historyScope.ServiceProvider.GetRequiredService<UserService>();
+			var language = await userService.GetLanguageAsync(
+				callbackQuery.From.Id,
+				callbackQuery.From.LanguageCode,
+				cancellationToken);
 			await SendQuestionHistoryAsync(
 				client,
 				callbackQuery.From.Id,
 				callbackQuery.Message?.Chat.Id ?? callbackQuery.From.Id,
 				historyPage,
-				cancellationToken);
+				cancellationToken,
+				language);
 			await client.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
 			return;
 		}
 
 		if (!TryParseCallbackData(callbackQuery.Data, out var action, out var questionId))
 		{
+			var fallbackMessages = BotMessages.For(
+				BotMessages.FromTelegramLanguageCode(callbackQuery.From.LanguageCode));
 			await client.AnswerCallbackQuery(
 				callbackQuery.Id,
-				text: "Это действие недоступно.",
+				text: fallbackMessages.UnavailableAction,
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -297,6 +356,12 @@ public sealed class TelegramPollingService(
 		await using var scope = scopeFactory.CreateAsyncScope();
 		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
 		var answerService = scope.ServiceProvider.GetRequiredService<AnswerService>();
+		var callbackUserService = scope.ServiceProvider.GetRequiredService<UserService>();
+		var userLanguage = await callbackUserService.GetLanguageAsync(
+			callbackQuery.From.Id,
+			callbackQuery.From.LanguageCode,
+			cancellationToken);
+		var messages = BotMessages.For(userLanguage);
 
 		if (action == "copy")
 		{
@@ -308,7 +373,7 @@ public sealed class TelegramPollingService(
 			{
 				await client.AnswerCallbackQuery(
 					callbackQuery.Id,
-					text: "❌ У тебя нет доступа к этому вопросу.",
+					text: messages.NoAccessToQuestion,
 					showAlert: true,
 					cancellationToken: cancellationToken);
 				return;
@@ -331,8 +396,8 @@ public sealed class TelegramPollingService(
 			if (result.Status != QuestionActionStatus.Success)
 			{
 				var error = result.Status == QuestionActionStatus.AlreadyDeleted
-					? "Вопрос уже удалён."
-					: "❌ У тебя нет доступа к этому вопросу.";
+					? messages.QuestionAlreadyDeleted
+					: messages.NoAccessToQuestion;
 				await client.AnswerCallbackQuery(
 					callbackQuery.Id,
 					text: error,
@@ -352,7 +417,7 @@ public sealed class TelegramPollingService(
 
 			await client.AnswerCallbackQuery(
 				callbackQuery.Id,
-				text: "🗑 Вопрос удалён.",
+				text: messages.QuestionDeleted,
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -365,9 +430,9 @@ public sealed class TelegramPollingService(
 		{
 			var error = answerStatus switch
 			{
-				QuestionActionStatus.AlreadyDeleted => "Вопрос уже удалён.",
-				QuestionActionStatus.AlreadyAnswered => "На этот вопрос уже сохранён ответ.",
-				_ => "❌ У тебя нет доступа к этому вопросу."
+				QuestionActionStatus.AlreadyDeleted => messages.QuestionAlreadyDeleted,
+				QuestionActionStatus.AlreadyAnswered => messages.AlreadyAnswered,
+				_ => messages.NoAccessToQuestion
 			};
 			await client.AnswerCallbackQuery(
 				callbackQuery.Id,
@@ -380,7 +445,7 @@ public sealed class TelegramPollingService(
 		await client.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
 		await client.SendMessage(
 			chatId: callbackQuery.From.Id,
-			text: "✍️ Напиши свой ответ на этот вопрос.",
+			text: messages.WriteAnswer,
 			cancellationToken: cancellationToken);
 	}
 
@@ -389,18 +454,23 @@ public sealed class TelegramPollingService(
 		long telegramUserId,
 		long chatId,
 		int page,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		BotLanguage language)
 	{
 		await using var scope = scopeFactory.CreateAsyncScope();
 		var questionService = scope.ServiceProvider.GetRequiredService<QuestionService>();
-		var history = await questionService.GetMyQuestionsAsync(telegramUserId, page, cancellationToken);
+		var history = await questionService.GetMyQuestionsAsync(
+			telegramUserId,
+			page,
+			cancellationToken,
+			language);
 
 		if (!history.UserExists || history.IsEmpty)
 		{
 			await client.SendMessage(
 				chatId: chatId,
-				text: history.EmptyMessage ?? QuestionService.EmptyHistoryText,
-				replyMarkup: CreateMainMenuKeyboard(),
+				text: history.EmptyMessage ?? BotMessages.For(language).EmptyHistory,
+				replyMarkup: CreateMainMenuKeyboard(language),
 				cancellationToken: cancellationToken);
 			return;
 		}
@@ -421,31 +491,43 @@ public sealed class TelegramPollingService(
 		}
 	}
 
-	private static ReplyKeyboardMarkup CreateMainMenuKeyboard() =>
-		new(new[]
+	private static ReplyKeyboardMarkup CreateMainMenuKeyboard(BotLanguage language)
+	{
+		var messages = BotMessages.For(language);
+		return new(new[]
 		{
-			new[] { new KeyboardButton("🚀 Запуск бота"), new KeyboardButton("🔗 Создать персональную ссылку") },
-			new[] { new KeyboardButton("📨 Мои вопросы") }
+			new[] { new KeyboardButton(messages.StartMenuButton), new KeyboardButton(messages.LinkMenuButton) },
+			new[] { new KeyboardButton(messages.MyQuestionsMenuButton), new KeyboardButton(messages.LanguageMenuButton) }
 		})
 		{
 			ResizeKeyboard = true,
 			IsPersistent = true
 		};
+	}
+
+	private static InlineKeyboardMarkup CreateLanguageKeyboard(BotMessages messages) =>
+		new(new[]
+		{
+			InlineKeyboardButton.WithCallbackData(messages.LanguageRussian, "language:set:ru"),
+			InlineKeyboardButton.WithCallbackData(messages.LanguageUkrainian, "language:set:uk"),
+			InlineKeyboardButton.WithCallbackData(messages.LanguageEnglish, "language:set:en")
+		});
 
 	private static InlineKeyboardMarkup? CreateHistoryKeyboard(QuestionHistoryPage history)
 	{
+		var messages = BotMessages.For(history.Language);
 		var buttons = new List<InlineKeyboardButton>();
 		if (history.HasPrevious)
 		{
 			buttons.Add(InlineKeyboardButton.WithCallbackData(
-				"⬅️ Назад",
+				messages.PreviousPageButton,
 				$"my_questions:page:{history.Page - 1}"));
 		}
 
 		if (history.HasNext)
 		{
 			buttons.Add(InlineKeyboardButton.WithCallbackData(
-				"➡️ Далее",
+				messages.NextPageButton,
 				$"my_questions:page:{history.Page + 1}"));
 		}
 
@@ -467,12 +549,24 @@ public sealed class TelegramPollingService(
 		}
 	}
 
-	private static bool IsMyQuestionsCommand(string text) =>
-		string.Equals(text.Trim(), "📨 Мои вопросы", StringComparison.OrdinalIgnoreCase) ||
-		string.Equals(text.Trim(), "/my_questions", StringComparison.OrdinalIgnoreCase);
+	private static bool IsMyQuestionsCommand(string text, BotLanguage language)
+	{
+		var button = BotMessages.For(language).MyQuestionsMenuButton;
+		return string.Equals(text.Trim(), button, StringComparison.OrdinalIgnoreCase) ||
+		       string.Equals(text.Trim(), "/my_questions", StringComparison.OrdinalIgnoreCase);
+	}
 
-	private static bool IsStartMenuCommand(string text) =>
-		string.Equals(text.Trim(), "🚀 Запуск бота", StringComparison.OrdinalIgnoreCase);
+	private static bool IsStartMenuCommand(string text, BotLanguage language) =>
+		string.Equals(
+			text.Trim(),
+			BotMessages.For(language).StartMenuButton,
+			StringComparison.OrdinalIgnoreCase);
+
+	private static bool IsLanguageCommand(string text, BotLanguage language) =>
+		string.Equals(
+			text.Trim(),
+			BotMessages.For(language).LanguageMenuButton,
+			StringComparison.OrdinalIgnoreCase);
 
 	private static bool TryParseHistoryCallbackData(string? data, out int page)
 	{
@@ -521,11 +615,33 @@ public sealed class TelegramPollingService(
 		return true;
 	}
 
-	private static bool IsLinkCommand(string text)
+	private static bool IsLinkCommand(string text, BotLanguage language)
 	{
 		var command = text.Split(' ', 2)[0].Split('@')[0];
 		return string.Equals(command, "/link", StringComparison.OrdinalIgnoreCase) ||
-		       string.Equals(text.Trim(), "🔗 Создать персональную ссылку", StringComparison.OrdinalIgnoreCase);
+		       string.Equals(
+			       text.Trim(),
+			       BotMessages.For(language).LinkMenuButton,
+			       StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static bool TryParseLanguageCallbackData(string? data, out BotLanguage language)
+	{
+		language = BotLanguage.Russian;
+		var parts = data?.Split(':');
+		if (parts is not { Length: 3 } || parts[0] != "language" || parts[1] != "set")
+		{
+			return false;
+		}
+
+		language = parts[2] switch
+		{
+			"ru" => BotLanguage.Russian,
+			"uk" => BotLanguage.Ukrainian,
+			"en" => BotLanguage.English,
+			_ => BotLanguage.Russian
+		};
+		return parts[2] is "ru" or "uk" or "en";
 	}
 
 	private static async Task SaveMessageAsync(

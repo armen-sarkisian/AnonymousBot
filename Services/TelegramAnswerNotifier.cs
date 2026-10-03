@@ -8,27 +8,31 @@ public sealed class TelegramAnswerNotifier(ITelegramBotClient botClient) : IAnsw
 {
     public async Task NotifyAsync(
         long ownerTelegramUserId,
+        BotLanguage language,
         Question question,
         Answer answer,
         CancellationToken cancellationToken)
     {
         await botClient.SendMessage(
             chatId: ownerTelegramUserId,
-            text: "✅ Ответ сохранён.",
+            text: BotMessages.For(language).AnswerSaved,
             cancellationToken: cancellationToken);
 
-        await SendDraftAsync(ownerTelegramUserId, question, answer, cancellationToken);
+        await SendDraftAsync(ownerTelegramUserId, language, question, answer, cancellationToken);
     }
 
     public async Task SendDraftAsync(
         long ownerTelegramUserId,
+        BotLanguage language,
         Question question,
         Answer answer,
         CancellationToken cancellationToken)
     {
-        var notification = AnswerNotificationBuilder.Create(ownerTelegramUserId, question, answer);
+        var notification = AnswerNotificationBuilder.Create(ownerTelegramUserId, question, answer, language);
         var keyboard = new InlineKeyboardMarkup(
-            InlineKeyboardButton.WithCallbackData("📋 Скопировать", notification.CopyCallbackData));
+            InlineKeyboardButton.WithCallbackData(
+                BotMessages.For(language).CopyButton,
+                notification.CopyCallbackData));
 
         await botClient.SendMessage(
             chatId: notification.OwnerTelegramUserId,

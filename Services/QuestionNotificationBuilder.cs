@@ -12,22 +12,26 @@ public sealed record QuestionActionButton(string Text, string CallbackData);
 public static class QuestionNotificationBuilder
 {
     public const int TelegramMessageLimit = 4096;
-    public const string Header = "📨 Новый анонимный вопрос";
-    private const string BodyPrefix = Header + "\n\n";
 
-    public static int MaximumQuestionLength => TelegramMessageLimit - BodyPrefix.Length;
+    public static int MaximumQuestionLength => Enum.GetValues<BotLanguage>()
+        .Min(language => TelegramMessageLimit -
+                        BotMessages.For(language).QuestionNotification(string.Empty).Length);
 
-    public static QuestionNotification Create(long receiverTelegramUserId, Question question)
+    public static QuestionNotification Create(
+        long receiverTelegramUserId,
+        Question question,
+        BotLanguage language = BotLanguage.Russian)
     {
         ArgumentNullException.ThrowIfNull(question);
 
+        var messages = BotMessages.For(language);
         return new QuestionNotification(
             receiverTelegramUserId,
-            BodyPrefix + question.Text,
+            messages.QuestionNotification(question.Text),
             [
-                new QuestionActionButton("💬 Ответить", CreateCallbackData("answer", question.Id)),
-                new QuestionActionButton("🗑 Удалить", CreateCallbackData("delete", question.Id)),
-                new QuestionActionButton("🚨 Пожаловаться", CreateCallbackData("report", question.Id))
+                new QuestionActionButton(messages.AnswerButton, CreateCallbackData("answer", question.Id)),
+                new QuestionActionButton(messages.DeleteButton, CreateCallbackData("delete", question.Id)),
+                new QuestionActionButton(messages.ReportButton, CreateCallbackData("report", question.Id))
             ]);
     }
 

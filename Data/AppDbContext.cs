@@ -19,6 +19,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(user => user.Username).HasMaxLength(32);
             entity.Property(user => user.FirstName).HasMaxLength(64);
             entity.Property(user => user.Token).IsRequired().HasMaxLength(128);
+            entity.Property(user => user.Language)
+                .HasConversion<int>()
+                .HasDefaultValue(BotLanguage.Russian);
             entity.HasIndex(user => user.TelegramUserId).IsUnique();
             entity.HasIndex(user => user.Token).IsUnique();
         });

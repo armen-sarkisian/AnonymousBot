@@ -8,10 +8,11 @@ public sealed class TelegramQuestionNotifier(ITelegramBotClient botClient) : IQu
 {
     public async Task NotifyAsync(
         long receiverTelegramUserId,
+        BotLanguage language,
         Question question,
         CancellationToken cancellationToken)
     {
-        var notification = QuestionNotificationBuilder.Create(receiverTelegramUserId, question);
+        var notification = QuestionNotificationBuilder.Create(receiverTelegramUserId, question, language);
         var buttons = notification.Buttons
             .Select(button => InlineKeyboardButton.WithCallbackData(button.Text, button.CallbackData))
             .ToArray();
