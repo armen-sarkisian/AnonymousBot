@@ -10,6 +10,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<Question> Questions => Set<Question>();
     public DbSet<Answer> Answers => Set<Answer>();
+    public DbSet<QuestionReport> QuestionReports => Set<QuestionReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -52,6 +53,19 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(answer => answer.Question)
                 .WithOne(question => question.Answer)
                 .HasForeignKey<Answer>(answer => answer.QuestionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<QuestionReport>(entity =>
+        {
+            entity.HasIndex(report => new { report.QuestionId, report.ReporterUserId }).IsUnique();
+            entity.HasOne(report => report.Question)
+                .WithMany(question => question.Reports)
+                .HasForeignKey(report => report.QuestionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(report => report.ReporterUser)
+                .WithMany(user => user.QuestionReports)
+                .HasForeignKey(report => report.ReporterUserId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

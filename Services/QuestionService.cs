@@ -1,5 +1,6 @@
 using AnonymousBot.Data;
 using AnonymousBot.Models;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace AnonymousBot.Services;
@@ -81,6 +82,58 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 
         question.Status = QuestionStatus.Deleted;
         await db.SaveChangesAsync(cancellationToken);
+        return new QuestionActionResult(QuestionActionStatus.Success);
+    }
+
+    public async Task<QuestionActionResult> ReportAsync(
+        long telegramUserId,
+        int questionId,
+        CancellationToken cancellationToken = default)
+    {
+        var reporter = await db.Users.SingleOrDefaultAsync(
+            user => user.TelegramUserId == telegramUserId,
+            cancellationToken);
+        if (reporter is null)
+        {
+            return new QuestionActionResult(QuestionActionStatus.NotAuthorized);
+        }
+
+        var question = await db.Questions.SingleOrDefaultAsync(
+            candidate => candidate.Id == questionId && candidate.ReceiverUserId == reporter.Id,
+            cancellationToken);
+        if (question is null)
+        {
+            return new QuestionActionResult(QuestionActionStatus.NotFoundOrNotOwner);
+        }
+
+        if (question.Status == QuestionStatus.Deleted)
+        {
+            return new QuestionActionResult(QuestionActionStatus.AlreadyDeleted);
+        }
+
+        if (await db.QuestionReports.AnyAsync(
+                report => report.QuestionId == questionId && report.ReporterUserId == reporter.Id,
+                cancellationToken))
+        {
+            return new QuestionActionResult(QuestionActionStatus.AlreadyReported);
+        }
+
+        db.QuestionReports.Add(new QuestionReport
+        {
+            QuestionId = questionId,
+            ReporterUserId = reporter.Id,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsUniqueConstraintViolation(exception))
+        {
+            return new QuestionActionResult(QuestionActionStatus.AlreadyReported);
+        }
+
         return new QuestionActionResult(QuestionActionStatus.Success);
     }
 
@@ -168,6 +221,9 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
             .Where(user => user.TelegramUserId == telegramUserId)
             .Select(user => (int?)user.Id)
             .SingleOrDefaultAsync(cancellationToken);
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
+        exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
 }
 
 public enum QuestionSubmissionStatus
@@ -188,7 +244,8 @@ public enum QuestionActionStatus
     NotFoundOrNotOwner,
     AlreadyDeleted,
     AlreadyAnswered,
-    NotAuthorized
+    NotAuthorized,
+    AlreadyReported
 }
 
 public sealed record QuestionActionResult(QuestionActionStatus Status);

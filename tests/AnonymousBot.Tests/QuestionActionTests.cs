@@ -54,6 +54,95 @@ public sealed class QuestionActionTests
     }
 
     [Fact]
+    public async Task ReportAsync_OwnerCanReportQuestion()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var question = await AddQuestionAsync(db, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier());
+
+        var result = await service.ReportAsync(owner.TelegramUserId, question.Id);
+
+        var report = await db.QuestionReports.SingleAsync();
+        Assert.Equal(QuestionActionStatus.Success, result.Status);
+        Assert.Equal(question.Id, report.QuestionId);
+        Assert.Equal(owner.Id, report.ReporterUserId);
+        Assert.Equal(DateTimeKind.Utc, report.CreatedAt.Kind);
+    }
+
+    [Fact]
+    public async Task ReportAsync_NonOwnerCannotReportQuestion()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var other = await AddUserAsync(db, 123);
+        var question = await AddQuestionAsync(db, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier());
+
+        var result = await service.ReportAsync(other.TelegramUserId, question.Id);
+
+        Assert.Equal(QuestionActionStatus.NotFoundOrNotOwner, result.Status);
+        Assert.Empty(await db.QuestionReports.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ReportAsync_RepeatedReportDoesNotCreateDuplicate()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var question = await AddQuestionAsync(db, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier());
+        await service.ReportAsync(owner.TelegramUserId, question.Id);
+
+        var result = await service.ReportAsync(owner.TelegramUserId, question.Id);
+
+        Assert.Equal(QuestionActionStatus.AlreadyReported, result.Status);
+        Assert.Equal(1, await db.QuestionReports.CountAsync());
+    }
+
+    [Fact]
+    public async Task ReportAsync_DeletedQuestionCannotBeReported()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var question = await AddQuestionAsync(db, owner.Id, QuestionStatus.Deleted);
+        var service = new QuestionService(db, new RecordingQuestionNotifier());
+
+        var result = await service.ReportAsync(owner.TelegramUserId, question.Id);
+
+        Assert.Equal(QuestionActionStatus.AlreadyDeleted, result.Status);
+        Assert.Empty(await db.QuestionReports.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ReportAsync_CreatesExactlyOneReport()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var question = await AddQuestionAsync(db, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier());
+
+        await service.ReportAsync(owner.TelegramUserId, question.Id);
+        await service.ReportAsync(owner.TelegramUserId, question.Id);
+
+        Assert.Equal(1, await db.QuestionReports.CountAsync());
+    }
+
+    [Fact]
+    public void QuestionReport_HasUniqueQuestionReporterIndex()
+    {
+        using var db = CreateDbContext();
+
+        var index = db.Model.FindEntityType(typeof(QuestionReport))!
+            .GetIndexes()
+            .Single(candidate => candidate.Properties
+                .Select(property => property.Name)
+                .SequenceEqual([nameof(QuestionReport.QuestionId), nameof(QuestionReport.ReporterUserId)]));
+
+        Assert.True(index.IsUnique);
+    }
+
+    [Fact]
     public async Task BeginAnswerAsync_OwnerCreatesWaitingSession()
     {
         await using var db = CreateDbContext();

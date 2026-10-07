@@ -387,6 +387,27 @@ public sealed class TelegramPollingService(
 			return;
 		}
 
+		if (action == "report")
+		{
+			var result = await questionService.ReportAsync(
+				callbackQuery.From.Id,
+				questionId,
+				cancellationToken);
+			var response = result.Status switch
+			{
+				QuestionActionStatus.Success => messages.ReportSent,
+				QuestionActionStatus.AlreadyReported => messages.ReportAlreadySent,
+				QuestionActionStatus.AlreadyDeleted => messages.QuestionAlreadyDeleted,
+				_ => messages.NoAccessToQuestion
+			};
+			await client.AnswerCallbackQuery(
+				callbackQuery.Id,
+				text: response,
+				showAlert: true,
+				cancellationToken: cancellationToken);
+			return;
+		}
+
 		if (action == "delete")
 		{
 			var result = await questionService.DeleteAsync(
@@ -609,7 +630,7 @@ public sealed class TelegramPollingService(
 			return false;
 		}
 
-		if ((parts[0] == "question" && parts[1] is "answer" or "delete") ||
+		if ((parts[0] == "question" && parts[1] is "answer" or "delete" or "report") ||
 			(parts[0] == "answer" && parts[1] == "copy"))
 		{
 			action = parts[1] == "answer" ? "begin-answer" : parts[1];

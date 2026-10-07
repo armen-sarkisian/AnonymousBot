@@ -10,4 +10,5 @@ public sealed class Question
 
     public User ReceiverUser { get; set; } = null!;
     public Answer? Answer { get; set; }
+    public ICollection<QuestionReport> Reports { get; } = new List<QuestionReport>();
 }
