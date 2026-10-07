@@ -11,6 +11,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Question> Questions => Set<Question>();
     public DbSet<Answer> Answers => Set<Answer>();
     public DbSet<QuestionReport> QuestionReports => Set<QuestionReport>();
+    public DbSet<AnonymousMessageAttempt> AnonymousMessageAttempts => Set<AnonymousMessageAttempt>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -67,6 +68,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany(user => user.QuestionReports)
                 .HasForeignKey(report => report.ReporterUserId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<AnonymousMessageAttempt>(entity =>
+        {
+            entity.HasIndex(attempt => new { attempt.TelegramUserId, attempt.CreatedAt });
         });
 
         modelBuilder.Entity<UserSession>(entity =>

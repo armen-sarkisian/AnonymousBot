@@ -279,6 +279,12 @@ public sealed class TelegramPollingService(
 					text: messages.MessageTooLong,
 					cancellationToken: cancellationToken);
 				return;
+			case QuestionSubmissionStatus.RateLimited:
+				await client.SendMessage(
+					chatId: message.Chat.Id,
+					text: messages.RateLimitExceeded,
+					cancellationToken: cancellationToken);
+				return;
 		}
 
 		await SaveMessageAsync(db, message, text, cancellationToken);

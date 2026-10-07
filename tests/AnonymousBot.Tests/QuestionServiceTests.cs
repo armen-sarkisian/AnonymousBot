@@ -40,6 +40,114 @@ public sealed class QuestionServiceTests
         Assert.DoesNotContain("sender-name", notifier.NotificationText);
         Assert.DoesNotContain("Sender", notifier.NotificationText);
         Assert.DoesNotContain(sender.TelegramUserId.ToString(), notifier.NotificationText);
+        Assert.Equal(sender.TelegramUserId,
+            (await db.AnonymousMessageAttempts.SingleAsync()).TelegramUserId);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_AllowsTheFifthQuestionWithinTenMinutes()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var service = new QuestionService(db, new RecordingQuestionNotifier(db));
+
+        for (var attempt = 0; attempt < QuestionService.AnonymousQuestionLimit; attempt++)
+        {
+            await AddWaitingSessionAsync(db, 123, owner.Id);
+            var result = await service.SubmitAsync(123, $"question {attempt}");
+            Assert.Equal(QuestionSubmissionStatus.Sent, result.Status);
+        }
+
+        Assert.Equal(5, await db.Questions.CountAsync());
+        Assert.Equal(5, await db.AnonymousMessageAttempts.CountAsync());
+    }
+
+    [Fact]
+    public async Task SubmitAsync_RejectsTheSixthQuestionWithoutSavingIt()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        var service = new QuestionService(db, new RecordingQuestionNotifier(db));
+
+        for (var attempt = 0; attempt < QuestionService.AnonymousQuestionLimit; attempt++)
+        {
+            await AddWaitingSessionAsync(db, 123, owner.Id);
+            Assert.Equal(
+                QuestionSubmissionStatus.Sent,
+                (await service.SubmitAsync(123, $"question {attempt}")).Status);
+        }
+
+        await AddWaitingSessionAsync(db, 123, owner.Id);
+        var result = await service.SubmitAsync(123, "sixth question");
+
+        Assert.Equal(QuestionSubmissionStatus.RateLimited, result.Status);
+        Assert.Equal(
+            "Слишком много сообщений.\n\nПопробуй отправить вопрос немного позже.",
+            BotMessages.For(BotLanguage.Russian).RateLimitExceeded);
+        Assert.Equal(5, await db.Questions.CountAsync());
+        Assert.Equal(5, await db.AnonymousMessageAttempts.CountAsync());
+        Assert.Equal(
+            UserSessionState.WaitingForAnonymousMessage,
+            (await db.UserSessions.SingleAsync()).State);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_AllowsAnotherQuestionAfterTenMinuteWindowExpires()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        db.AnonymousMessageAttempts.AddRange(Enumerable.Range(0, QuestionService.AnonymousQuestionLimit)
+            .Select(_ => new AnonymousMessageAttempt
+            {
+                TelegramUserId = 123,
+                CreatedAt = DateTime.UtcNow - QuestionService.AnonymousQuestionWindow - TimeSpan.FromSeconds(1)
+            }));
+        await db.SaveChangesAsync();
+        await AddWaitingSessionAsync(db, 123, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier(db));
+
+        var result = await service.SubmitAsync(123, "after cooldown");
+
+        Assert.Equal(QuestionSubmissionStatus.Sent, result.Status);
+        Assert.Equal(1, await db.AnonymousMessageAttempts.CountAsync());
+        Assert.Single(await db.Questions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task SubmitAsync_RateLimitIsIndependentForEachSender()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        db.AnonymousMessageAttempts.AddRange(Enumerable.Range(0, QuestionService.AnonymousQuestionLimit)
+            .Select(_ => new AnonymousMessageAttempt
+            {
+                TelegramUserId = 123,
+                CreatedAt = DateTime.UtcNow
+            }));
+        await db.SaveChangesAsync();
+        await AddWaitingSessionAsync(db, 789, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier(db));
+
+        var result = await service.SubmitAsync(789, "another sender");
+
+        Assert.Equal(QuestionSubmissionStatus.Sent, result.Status);
+        Assert.Equal(QuestionService.AnonymousQuestionLimit + 1, await db.AnonymousMessageAttempts.CountAsync());
+    }
+
+    [Fact]
+    public async Task SubmitAsync_ParallelMessagesCannotCreateMoreThanOneQuestionForTheSameSession()
+    {
+        await using var db = CreateDbContext();
+        var owner = await AddUserAsync(db, 456);
+        await AddWaitingSessionAsync(db, 123, owner.Id);
+        var service = new QuestionService(db, new RecordingQuestionNotifier(db));
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 6)
+            .Select(index => service.SubmitAsync(123, $"parallel question {index}")));
+
+        Assert.Single(await db.Questions.ToListAsync());
+        Assert.Single(await db.AnonymousMessageAttempts.ToListAsync());
+        Assert.Contains(results, result => result.Status == QuestionSubmissionStatus.Sent);
     }
 
     [Fact]
@@ -55,6 +163,7 @@ public sealed class QuestionServiceTests
 
         Assert.Equal(QuestionSubmissionStatus.SelfMessage, result.Status);
         Assert.Empty(await db.Questions.ToListAsync());
+        Assert.Empty(await db.AnonymousMessageAttempts.ToListAsync());
         Assert.Empty(notifier.Notifications);
         Assert.Equal(UserSessionState.None, (await db.UserSessions.SingleAsync()).State);
     }
@@ -72,6 +181,7 @@ public sealed class QuestionServiceTests
 
         Assert.Equal(QuestionSubmissionStatus.ReceiverUnavailable, result.Status);
         Assert.Empty(await db.Questions.ToListAsync());
+        Assert.Empty(await db.AnonymousMessageAttempts.ToListAsync());
         Assert.Empty(notifier.Notifications);
         Assert.Equal(UserSessionState.None, (await db.UserSessions.SingleAsync()).State);
     }
@@ -89,6 +199,7 @@ public sealed class QuestionServiceTests
 
         Assert.Equal(QuestionSubmissionStatus.EmptyText, result.Status);
         Assert.Empty(await db.Questions.ToListAsync());
+        Assert.Empty(await db.AnonymousMessageAttempts.ToListAsync());
         Assert.Empty(notifier.Notifications);
         Assert.Equal(
             UserSessionState.WaitingForAnonymousMessage,
@@ -179,14 +290,22 @@ public sealed class QuestionServiceTests
         long senderTelegramUserId,
         int receiverUserId)
     {
-        db.UserSessions.Add(new UserSession
+        var session = await db.UserSessions.SingleOrDefaultAsync(
+            candidate => candidate.TelegramUserId == senderTelegramUserId);
+        if (session is null)
         {
-            TelegramUserId = senderTelegramUserId,
-            State = UserSessionState.WaitingForAnonymousMessage,
-            ReceiverUserId = receiverUserId,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        });
+            session = new UserSession
+            {
+                TelegramUserId = senderTelegramUserId,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.UserSessions.Add(session);
+        }
+
+        session.State = UserSessionState.WaitingForAnonymousMessage;
+        session.ReceiverUserId = receiverUserId;
+        session.QuestionId = null;
+        session.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
     }
 

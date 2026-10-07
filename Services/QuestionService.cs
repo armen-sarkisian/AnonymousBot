@@ -1,13 +1,18 @@
+using System.Data;
 using AnonymousBot.Data;
 using AnonymousBot.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace AnonymousBot.Services;
 
 public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 {
     public const int QuestionsPerPage = 5;
+    public const int AnonymousQuestionLimit = 5;
+    public static readonly TimeSpan AnonymousQuestionWindow = TimeSpan.FromMinutes(10);
+
     public async Task<QuestionHistoryPage> GetMyQuestionsAsync(
         long telegramUserId,
         int requestedPage,
@@ -150,6 +155,60 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         string? text,
         CancellationToken cancellationToken = default)
     {
+        IDbContextTransaction? transaction = null;
+        Question? questionToNotify = null;
+        User? receiverToNotify = null;
+        QuestionSubmissionResult result;
+
+        try
+        {
+            if (db.Database.IsSqlServer())
+            {
+                transaction = await db.Database.BeginTransactionAsync(
+                    IsolationLevel.ReadCommitted,
+                    cancellationToken);
+                if (!await AcquireSenderLockAsync(senderTelegramUserId, transaction, cancellationToken))
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new QuestionSubmissionResult(QuestionSubmissionStatus.RateLimited);
+                }
+            }
+
+            (result, questionToNotify, receiverToNotify) = await SubmitUnderLockAsync(
+                senderTelegramUserId,
+                text,
+                cancellationToken);
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
+        }
+
+        if (questionToNotify is not null && receiverToNotify is not null)
+        {
+            await notifier.NotifyAsync(
+                receiverToNotify.TelegramUserId,
+                receiverToNotify.Language,
+                questionToNotify,
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    private async Task<(QuestionSubmissionResult Result, Question? Question, User? Receiver)> SubmitUnderLockAsync(
+        long senderTelegramUserId,
+        string? text,
+        CancellationToken cancellationToken)
+    {
         var session = await db.UserSessions.SingleOrDefaultAsync(
             candidate => candidate.TelegramUserId == senderTelegramUserId &&
                          candidate.State == UserSessionState.WaitingForAnonymousMessage,
@@ -157,7 +216,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 
         if (session is null)
         {
-            return new QuestionSubmissionResult(QuestionSubmissionStatus.NotWaiting);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.NotWaiting), null, null);
         }
 
         var receiver = session.ReceiverUserId is { } receiverId
@@ -168,7 +227,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         {
             ClearSession(session);
             await db.SaveChangesAsync(cancellationToken);
-            return new QuestionSubmissionResult(QuestionSubmissionStatus.ReceiverUnavailable);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.ReceiverUnavailable), null, null);
         }
 
         var senderUserId = await db.Users
@@ -179,33 +238,91 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         {
             ClearSession(session);
             await db.SaveChangesAsync(cancellationToken);
-            return new QuestionSubmissionResult(QuestionSubmissionStatus.SelfMessage);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.SelfMessage), null, null);
         }
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            return new QuestionSubmissionResult(QuestionSubmissionStatus.EmptyText);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.EmptyText), null, null);
         }
 
         if (text.Length > QuestionNotificationBuilder.MaximumQuestionLength)
         {
-            return new QuestionSubmissionResult(QuestionSubmissionStatus.TooLong);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.TooLong), null, null);
+        }
+
+        var now = DateTime.UtcNow;
+        var cutoff = now - AnonymousQuestionWindow;
+        var expiredAttempts = await db.AnonymousMessageAttempts
+            .Where(attempt =>
+                attempt.TelegramUserId == senderTelegramUserId &&
+                attempt.CreatedAt <= cutoff)
+            .ToListAsync(cancellationToken);
+        db.AnonymousMessageAttempts.RemoveRange(expiredAttempts);
+
+        var recentAttempts = await db.AnonymousMessageAttempts.CountAsync(
+            attempt =>
+                attempt.TelegramUserId == senderTelegramUserId &&
+                attempt.CreatedAt > cutoff,
+            cancellationToken);
+        if (recentAttempts >= AnonymousQuestionLimit)
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return (new QuestionSubmissionResult(QuestionSubmissionStatus.RateLimited), null, null);
         }
 
         var question = new Question
         {
             ReceiverUserId = receiver.Id,
             Text = text,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = now,
             Status = QuestionStatus.New
         };
 
+        db.AnonymousMessageAttempts.Add(new AnonymousMessageAttempt
+        {
+            TelegramUserId = senderTelegramUserId,
+            CreatedAt = now
+        });
         db.Questions.Add(question);
         ClearSession(session);
         await db.SaveChangesAsync(cancellationToken);
 
-        await notifier.NotifyAsync(receiver.TelegramUserId, receiver.Language, question, cancellationToken);
-        return new QuestionSubmissionResult(QuestionSubmissionStatus.Sent);
+        return (new QuestionSubmissionResult(QuestionSubmissionStatus.Sent), question, receiver);
+    }
+
+    private static async Task<bool> AcquireSenderLockAsync(
+        long senderTelegramUserId,
+        IDbContextTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var connection = transaction.GetDbTransaction().Connection
+            ?? throw new InvalidOperationException("The rate-limit transaction has no database connection.");
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction.GetDbTransaction();
+        command.CommandText =
+            "DECLARE @result int; " +
+            "EXEC @result = sys.sp_getapplock " +
+            "@Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000; " +
+            "SELECT @result;";
+
+        var resourceParameter = command.CreateParameter();
+        resourceParameter.ParameterName = "@resource";
+        resourceParameter.Value = $"AnonymousQuestionRateLimit:{senderTelegramUserId}";
+        command.Parameters.Add(resourceParameter);
+
+        var result = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+        if (result == -1)
+        {
+            return false;
+        }
+
+        if (result < 0)
+        {
+            throw new InvalidOperationException($"Could not acquire anonymous-question rate-limit lock (SQL result {result}).");
+        }
+
+        return true;
     }
 
     private static void ClearSession(UserSession session)
@@ -233,7 +350,8 @@ public enum QuestionSubmissionStatus
     ReceiverUnavailable,
     SelfMessage,
     EmptyText,
-    TooLong
+    TooLong,
+    RateLimited
 }
 
 public sealed record QuestionSubmissionResult(QuestionSubmissionStatus Status);
