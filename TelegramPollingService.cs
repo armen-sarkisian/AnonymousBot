@@ -475,19 +475,21 @@ public sealed class TelegramPollingService(
 			return;
 		}
 
-		var displayParts = history.Items
-			.SelectMany(item => SplitForTelegram(item.ToDisplayText()))
-			.ToArray();
-		for (var index = 0; index < displayParts.Length; index++)
+		for (var index = 0; index < history.Items.Count; index++)
 		{
-			var replyMarkup = index == displayParts.Length - 1
-				? CreateHistoryKeyboard(history)
-				: null;
-			await client.SendMessage(
-				chatId: chatId,
-				text: displayParts[index],
-				replyMarkup: replyMarkup,
-				cancellationToken: cancellationToken);
+			var item = history.Items[index];
+			var messageParts = SplitForTelegram(item.ToDisplayText()).ToArray();
+			for (var partIndex = 0; partIndex < messageParts.Length; partIndex++)
+			{
+				var replyMarkup = partIndex == messageParts.Length - 1
+					? CreateQuestionHistoryKeyboard(item, history, index == history.Items.Count - 1)
+					: null;
+				await client.SendMessage(
+					chatId: chatId,
+					text: messageParts[partIndex],
+					replyMarkup: replyMarkup,
+					cancellationToken: cancellationToken);
+			}
 		}
 	}
 
@@ -513,25 +515,41 @@ public sealed class TelegramPollingService(
 			InlineKeyboardButton.WithCallbackData(messages.LanguageEnglish, "language:set:en")
 		});
 
-	private static InlineKeyboardMarkup? CreateHistoryKeyboard(QuestionHistoryPage history)
+	private static InlineKeyboardMarkup? CreateQuestionHistoryKeyboard(
+		QuestionHistoryItem item,
+		QuestionHistoryPage history,
+		bool isLastItem)
 	{
 		var messages = BotMessages.For(history.Language);
-		var buttons = new List<InlineKeyboardButton>();
-		if (history.HasPrevious)
+		var rows = new List<InlineKeyboardButton[]>();
+		if (item.AnswerText is null)
 		{
-			buttons.Add(InlineKeyboardButton.WithCallbackData(
+			rows.Add(QuestionNotificationBuilder.CreateActionButtons(item.Id, history.Language)
+				.Select(button => InlineKeyboardButton.WithCallbackData(button.Text, button.CallbackData))
+				.ToArray());
+		}
+
+		var pageButtons = new List<InlineKeyboardButton>();
+		if (isLastItem && history.HasPrevious)
+		{
+			pageButtons.Add(InlineKeyboardButton.WithCallbackData(
 				messages.PreviousPageButton,
 				$"my_questions:page:{history.Page - 1}"));
 		}
 
-		if (history.HasNext)
+		if (isLastItem && history.HasNext)
 		{
-			buttons.Add(InlineKeyboardButton.WithCallbackData(
+			pageButtons.Add(InlineKeyboardButton.WithCallbackData(
 				messages.NextPageButton,
 				$"my_questions:page:{history.Page + 1}"));
 		}
 
-		return buttons.Count == 0 ? null : new InlineKeyboardMarkup(buttons);
+		if (pageButtons.Count > 0)
+		{
+			rows.Add(pageButtons.ToArray());
+		}
+
+		return rows.Count == 0 ? null : new InlineKeyboardMarkup(rows);
 	}
 
 	private static IEnumerable<string> SplitForTelegram(string text)

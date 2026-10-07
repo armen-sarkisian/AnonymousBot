@@ -28,11 +28,20 @@ public static class QuestionNotificationBuilder
         return new QuestionNotification(
             receiverTelegramUserId,
             messages.QuestionNotification(question.Text),
-            [
-                new QuestionActionButton(messages.AnswerButton, CreateCallbackData("answer", question.Id)),
-                new QuestionActionButton(messages.DeleteButton, CreateCallbackData("delete", question.Id)),
-                new QuestionActionButton(messages.ReportButton, CreateCallbackData("report", question.Id))
-            ]);
+            CreateActionButtons(question.Id, language));
+    }
+
+    public static IReadOnlyList<QuestionActionButton> CreateActionButtons(
+        int questionId,
+        BotLanguage language = BotLanguage.Russian)
+    {
+        var messages = BotMessages.For(language);
+        return
+        [
+            new QuestionActionButton(messages.AnswerButton, CreateCallbackData("answer", questionId)),
+            new QuestionActionButton(messages.DeleteButton, CreateCallbackData("delete", questionId)),
+            new QuestionActionButton(messages.ReportButton, CreateCallbackData("report", questionId))
+        ];
     }
 
     public static string CreateCallbackData(string action, int questionId)

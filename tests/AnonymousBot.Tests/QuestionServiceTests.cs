@@ -118,6 +118,21 @@ public sealed class QuestionServiceTests
         Assert.Contains("anonymous text", notification.Text);
     }
 
+    [Theory]
+    [InlineData(BotLanguage.Russian)]
+    [InlineData(BotLanguage.Ukrainian)]
+    [InlineData(BotLanguage.English)]
+    public void CreateActionButtons_UsesQuestionOnlyCallbacks(BotLanguage language)
+    {
+        var buttons = QuestionNotificationBuilder.CreateActionButtons(42, language);
+
+        Assert.Collection(
+            buttons,
+            answer => Assert.Equal("question:answer:42", answer.CallbackData),
+            delete => Assert.Equal("question:delete:42", delete.CallbackData),
+            report => Assert.Equal("question:report:42", report.CallbackData));
+    }
+
     [Fact]
     public async Task SubmitAsync_RejectsTextThatWouldExceedTelegramMessageLimit()
     {
