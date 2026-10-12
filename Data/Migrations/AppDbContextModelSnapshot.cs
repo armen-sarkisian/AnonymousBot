@@ -69,6 +69,19 @@ namespace AnonymousBot.Data.Migrations
                     b.ToTable("Answers");
                 });
 
+            modelBuilder.Entity("AnonymousBot.Models.ProcessedTelegramUpdate", b =>
+                {
+                    b.Property<long>("UpdateId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("ProcessedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("UpdateId");
+
+                    b.ToTable("ProcessedTelegramUpdates");
+                });
+
             modelBuilder.Entity("AnonymousBot.Models.Question", b =>
                 {
                     b.Property<int>("Id")

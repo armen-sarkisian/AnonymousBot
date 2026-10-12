@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using AnonymousBot.Data;
 using AnonymousBot.Models;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace AnonymousBot.Services;
@@ -153,7 +152,7 @@ public sealed class UserService(AppDbContext db)
             .Replace('/', '_');
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
-        exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
+        PostgreSqlDatabaseErrors.IsUniqueViolation(exception);
 }
 
 public sealed record UserStartResult(bool IsNewUser, bool IsBlocked, BotLanguage Language)
