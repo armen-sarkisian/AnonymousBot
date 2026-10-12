@@ -2,6 +2,7 @@ using AnonymousBot.Data;
 using AnonymousBot.Models;
 using AnonymousBot.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace AnonymousBot.Tests;
@@ -139,6 +140,34 @@ public sealed class UserServiceTests
         var link = TelegramLinkBuilder.Create("@example_bot", "user-token");
 
         Assert.Equal("https://t.me/example_bot?start=user-token", link);
+    }
+
+    [Fact]
+    public async Task GetLinkAsync_BuildsPersonalLinkFromBotUsernameEnvironmentSetting()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BOT_TOKEN"] = "test-token",
+                ["BOT_USERNAME"] = "example_bot",
+                ["WEBHOOK_URL"] = "https://example.com/telegram/webhook",
+                ["WEBHOOK_SECRET"] = "valid-webhook-secret"
+            })
+            .Build();
+        var webhookConfiguration = WebhookConfiguration.Load(configuration);
+
+        await using var db = CreateDbContext();
+        db.Users.Add(new User
+        {
+            TelegramUserId = 123,
+            Token = "personal-token"
+        });
+        await db.SaveChangesAsync();
+        var service = new UserService(db);
+
+        var result = await service.GetLinkAsync(123, webhookConfiguration.BotUsername);
+
+        Assert.Equal("https://t.me/example_bot?start=personal-token", result.Link);
     }
 
     [Fact]

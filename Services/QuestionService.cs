@@ -1,7 +1,7 @@
 using System.Data;
+using System.Diagnostics;
 using AnonymousBot.Data;
 using AnonymousBot.Models;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -162,16 +162,29 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
 
         try
         {
-            if (db.Database.IsSqlServer())
+            var providerName = db.Database.ProviderName;
+            if (string.Equals(providerName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
             {
                 transaction = await db.Database.BeginTransactionAsync(
                     IsolationLevel.ReadCommitted,
                     cancellationToken);
-                if (!await AcquireSenderLockAsync(senderTelegramUserId, transaction, cancellationToken))
+                var acquired = await AcquirePostgreSqlSenderLockAsync(
+                    senderTelegramUserId,
+                    transaction,
+                    cancellationToken);
+                if (!acquired)
                 {
                     await transaction.CommitAsync(cancellationToken);
                     return new QuestionSubmissionResult(QuestionSubmissionStatus.RateLimited);
                 }
+            }
+            else if (!string.Equals(
+                         providerName,
+                         "Microsoft.EntityFrameworkCore.InMemory",
+                         StringComparison.Ordinal))
+            {
+                throw new NotSupportedException(
+                    $"Anonymous-question rate limiting is not configured for EF Core provider '{providerName}'.");
             }
 
             (result, questionToNotify, receiverToNotify) = await SubmitUnderLockAsync(
@@ -291,38 +304,41 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
         return (new QuestionSubmissionResult(QuestionSubmissionStatus.Sent), question, receiver);
     }
 
-    private static async Task<bool> AcquireSenderLockAsync(
+    private static async Task<bool> AcquirePostgreSqlSenderLockAsync(
         long senderTelegramUserId,
         IDbContextTransaction transaction,
         CancellationToken cancellationToken)
     {
+        var lockKey = PostgreSqlAdvisoryLockKeys.ForAnonymousQuestionSender(senderTelegramUserId);
         var connection = transaction.GetDbTransaction().Connection
             ?? throw new InvalidOperationException("The rate-limit transaction has no database connection.");
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction.GetDbTransaction();
-        command.CommandText =
-            "DECLARE @result int; " +
-            "EXEC @result = sys.sp_getapplock " +
-            "@Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 5000; " +
-            "SELECT @result;";
+        var stopwatch = Stopwatch.StartNew();
+        var timeout = TimeSpan.FromSeconds(5);
+        var retryInterval = TimeSpan.FromMilliseconds(100);
 
-        var resourceParameter = command.CreateParameter();
-        resourceParameter.ParameterName = "@resource";
-        resourceParameter.Value = $"AnonymousQuestionRateLimit:{senderTelegramUserId}";
-        command.Parameters.Add(resourceParameter);
-
-        var result = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
-        if (result == -1)
+        while (true)
         {
-            return false;
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction.GetDbTransaction();
+            command.CommandText = "SELECT pg_try_advisory_xact_lock(@lockKey);";
+            command.CommandTimeout = 5;
+            PostgreSqlTelegramUpdateLock.AddLockKeyParameter(command, lockKey);
+            if (Convert.ToBoolean(await command.ExecuteScalarAsync(cancellationToken)))
+            {
+                return true;
+            }
 
-        if (result < 0)
-        {
-            throw new InvalidOperationException($"Could not acquire anonymous-question rate-limit lock (SQL result {result}).");
-        }
+            var remaining = timeout - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return false;
+            }
 
-        return true;
+            await Task.Delay(
+                remaining < retryInterval ? remaining : retryInterval,
+                cancellationToken);
+        }
     }
 
     private static void ClearSession(UserSession session)
@@ -340,7 +356,7 @@ public sealed class QuestionService(AppDbContext db, IQuestionNotifier notifier)
             .SingleOrDefaultAsync(cancellationToken);
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
-        exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
+        PostgreSqlDatabaseErrors.IsUniqueViolation(exception);
 }
 
 public enum QuestionSubmissionStatus

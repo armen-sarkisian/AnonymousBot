@@ -1,6 +1,5 @@
 using AnonymousBot.Data;
 using AnonymousBot.Models;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace AnonymousBot.Services;
@@ -188,7 +187,7 @@ public sealed class AnswerService(AppDbContext db, IAnswerNotifier notifier)
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception) =>
-        exception.GetBaseException() is SqlException { Number: 2601 or 2627 };
+        PostgreSqlDatabaseErrors.IsUniqueViolation(exception);
 }
 
 public enum AnswerSubmissionStatus

@@ -4,9 +4,9 @@ using Microsoft.Extensions.Configuration;
 
 namespace AnonymousBot.Data;
 
-public sealed class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
+public sealed class AppDbContextFactory : IDesignTimeDbContextFactory<PostgreSqlAppDbContext>
 {
-    public AppDbContext CreateDbContext(string[] args)
+    public PostgreSqlAppDbContext CreateDbContext(string[] args)
     {
         var configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
@@ -21,10 +21,9 @@ public sealed class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbConte
                 "Set ConnectionStrings:DefaultConnection or ConnectionStrings__DefaultConnection.");
         }
 
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer(connectionString)
-            .Options;
-
-        return new AppDbContext(options);
+        return new PostgreSqlAppDbContext(
+            new DbContextOptionsBuilder<PostgreSqlAppDbContext>()
+                .UseNpgsql(connectionString)
+                .Options);
     }
 }

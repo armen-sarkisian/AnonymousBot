@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AnonymousBot.Data;
 
-public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<TelegramMessage> Messages => Set<TelegramMessage>();
     public DbSet<User> Users => Set<User>();
@@ -12,8 +12,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Answer> Answers => Set<Answer>();
     public DbSet<QuestionReport> QuestionReports => Set<QuestionReport>();
     public DbSet<AnonymousMessageAttempt> AnonymousMessageAttempts => Set<AnonymousMessageAttempt>();
+    public DbSet<ProcessedTelegramUpdate> ProcessedTelegramUpdates => Set<ProcessedTelegramUpdate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        ConfigureModel(modelBuilder);
+    }
+
+    internal static void ConfigureModel(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<User>(entity =>
         {
@@ -73,6 +79,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
         modelBuilder.Entity<AnonymousMessageAttempt>(entity =>
         {
             entity.HasIndex(attempt => new { attempt.TelegramUserId, attempt.CreatedAt });
+        });
+
+        modelBuilder.Entity<ProcessedTelegramUpdate>(entity =>
+        {
+            entity.HasKey(update => update.UpdateId);
+            entity.Property(update => update.UpdateId).ValueGeneratedNever();
         });
 
         modelBuilder.Entity<UserSession>(entity =>

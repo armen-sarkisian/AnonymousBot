@@ -3,30 +3,15 @@ using AnonymousBot.Models;
 using AnonymousBot.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Telegram.Bot;
-using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
 
-public sealed class TelegramPollingService(
-	ITelegramBotClient botClient,
+public sealed class TelegramUpdateHandler(
 	IServiceScopeFactory scopeFactory,
-	IConfiguration configuration,
-	ILogger<TelegramPollingService> logger) : BackgroundService
+	WebhookConfiguration webhookConfiguration,
+	ILogger<TelegramUpdateHandler> logger) : ITelegramUpdateHandler
 {
-	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-	{
-		await botClient.DeleteWebhook(cancellationToken: stoppingToken);
-
-		botClient.StartReceiving(
-			updateHandler: HandleUpdateAsync,
-			errorHandler: HandlePollingErrorAsync,
-			receiverOptions: new ReceiverOptions { AllowedUpdates = [] },
-			cancellationToken: stoppingToken);
-
-		await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
-	}
-
-	private async Task HandleUpdateAsync(
+	public async Task HandleAsync(
 		ITelegramBotClient client,
 		Update update,
 		CancellationToken cancellationToken)
@@ -213,8 +198,10 @@ public sealed class TelegramPollingService(
 
 		if (IsLinkCommand(text, language))
 		{
-			var botUsername = configuration["Telegram:BotUsername"];
-			var link = await userService.GetLinkAsync(telegramUser.Id, botUsername, cancellationToken);
+			var link = await userService.GetLinkAsync(
+				telegramUser.Id,
+				webhookConfiguration.BotUsername,
+				cancellationToken);
 			if (!link.UserExists)
 			{
 				await client.SendMessage(
@@ -705,12 +692,4 @@ public sealed class TelegramPollingService(
 		await db.SaveChangesAsync(cancellationToken);
 	}
 
-	private Task HandlePollingErrorAsync(
-		ITelegramBotClient client,
-		Exception exception,
-		CancellationToken cancellationToken)
-	{
-		logger.LogError(exception, "Telegram long polling failed.");
-		return Task.CompletedTask;
-	}
 }
